@@ -1,0 +1,105 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  no-egress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Egress scan
+        run: ./scripts/check_no_egress.sh
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose config -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm -r lint
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Build
+        run: pnpm -r build
+
+  api-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check .
+      - name: Black
+        run: black --check .
+      - name: Mypy
+        run: mypy app
+      - name: Bandit
+        run: bandit -c pyproject.toml -r app
+
+  api-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack
+        run: docker compose up --build --detach --wait
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install -e ".[dev]"
+        working-directory: apps/api
+      - name: Readiness against live stack
+        working-directory: apps/api
+        env:
+          AIVA_INTEGRATION: "1"
+          AIVA_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@localhost:15432/aiva
+          AIVA_REDIS_URL: redis://localhost:16379/0
+          AIVA_MINIO_ENDPOINT: localhost:19000
+          AIVA_MINIO_ACCESS_KEY: aiva_dev
+          AIVA_MINIO_SECRET_KEY: aiva_dev_only_change_me
+          AIVA_MINIO_BUCKET: aiva-artifacts
+          AIVA_MINIO_SECURE: "false"
+        run: pytest tests/test_integration_readiness.py
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
