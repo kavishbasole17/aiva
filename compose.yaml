@@ -1,0 +1,93 @@
+name: aiva
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: aiva
+      POSTGRES_PASSWORD: aiva_dev_only
+      POSTGRES_DB: aiva
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiva -d aiva"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: aiva_dev
+      MINIO_ROOT_PASSWORD: aiva_dev_only_change_me
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-29T15-34-59Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 aiva_dev aiva_dev_only_change_me &&
+      mc mb --ignore-existing local/aiva-artifacts"
+
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      AIVA_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@postgres:5432/aiva
+      AIVA_REDIS_URL: redis://redis:6379/0
+      AIVA_MINIO_ENDPOINT: minio:9000
+      AIVA_MINIO_ACCESS_KEY: aiva_dev
+      AIVA_MINIO_SECRET_KEY: aiva_dev_only_change_me
+      AIVA_MINIO_BUCKET: aiva-artifacts
+      AIVA_MINIO_SECURE: "false"
+      AIVA_LOG_LEVEL: INFO
+      AIVA_ENVIRONMENT: development
+    ports:
+      - "18000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

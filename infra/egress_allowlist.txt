@@ -1,0 +1,9 @@
+# Deny-by-default allowlist for scheme-bearing URLs that reference internal or
+# loopback resources only. Format: <path-glob>::<regex-tested-against-full-line>
+# Anything matching an external host must NOT be added here.
+
+apps/web-recruiter/index.html::xmlns=
+apps/web-candidate/index.html::xmlns=
+compose.yaml::http://127\.0\.0\.1
+compose.yaml::http://minio:9000
+apps/api/tests/conftest.py::http://testserver
