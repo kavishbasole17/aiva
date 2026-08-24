@@ -1,7 +1,7 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/", "eslint.config.js"] },
+  { ignores: ["dist/", "eslint.config.js", "tailwind.config.ts", "postcss.config.js"] },
   ...tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {

@@ -120,3 +120,37 @@ container heuristics.
 Rejected: dropping bucket-init into the API entrypoint (mixes infra concerns into app
 boot), `restart: always` on init (masks real failures).
 
+## ADR-014 — Brand colour reconciliation from atigro.com
+
+Context: §4 requires sampling atigro.com before styling; proposed `--signal` was teal
+#12B5C9 described as "from Atigro's blue".
+Decision: sampled live site CSS: primary blue **#1863DC** (35 occurrences) and darker
+variant **#046BB3** (26). Dark theme `--signal: #1863DC`, light theme `--signal:
+#046BB3`. Added derived `--signal-text` (#6FB1FF dark / #045a97 light) because #1863DC
+on the abyss base measures ~3.5:1 — acceptable for large UI accents, below AA for body
+text; small signal-coloured text uses the brighter tint. `--ember` stays as specified
+(#F2701F/#C4540F): no clear counter-evidence on the site, and the action accent must
+stay distinct from Atigro's blue.
+Consequences: brand-faithful palette with AA-compliant text usage documented;
+sequential chart ramps derive from --signal per §4.1.
+
+## ADR-015 — exactOptionalPropertyTypes disabled for UI packages
+
+Context: motion (Framer Motion v11) component typings are incompatible with
+TypeScript's `exactOptionalPropertyTypes`; every optional prop assignment on
+`motion.*` elements errors, forcing spread-hacks through the entire component layer.
+Decision: drop exactly that flag from `packages/ui` and the two web apps' tsconfigs.
+All other strict flags remain, including `noUncheckedIndexedAccess`.
+Consequences: marginally weaker optionality checking in frontend code; unblocks the
+locked animation library without `any` casts or banned suppressions. Revisit when
+motion ships EOP-compatible types.
+
+## ADR-016 — Fonts via @fontsource variable packages
+
+Decision: Space Grotesk Variable, Inter Variable, JetBrains Mono Variable vendored as
+npm @fontsource-variable packages (all SIL OFL 1.1 — commercial use cleared), bundled
+by Vite into self-hosted assets; no CDN, no external font fetch at runtime.
+Consequences: licence-safe, versioned, reproducible; woff2 preloading refinements land
+with the performance pass in M5.
+
+
