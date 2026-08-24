@@ -1,0 +1,18 @@
+[project]
+name = "aiva-eval"
+version = "0.1.0"
+description = "AIVA golden-set evaluation harness"
+requires-python = ">=3.11,<3.12"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<9"]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["aiva_eval"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
