@@ -25,6 +25,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    # Fields are populated from AIVA_* environment variables at process start;
-    # requiring them as constructor args would defeat fail-closed env validation.
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

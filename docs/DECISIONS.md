@@ -105,3 +105,18 @@ until their milestones; no stub code pretending to work. README.md and
 CLIENT_DOCUMENTATION.md are authored by a parallel documentation agent based on the
 code; this repo's engineering docs are PLAN/DECISIONS/RUNBOOK/MODEL_CARD.
 Consequences: no fake implementations; doc drift owned explicitly.
+
+## ADR-013 — Readiness polling instead of `compose up --wait`
+
+Context: the MinIO bucket-init service is a legitimate one-shot container that exits 0
+on success. `docker compose up --wait` reports any exited container as a failure, so a
+fully healthy stack returns non-zero — proven in CI.
+Decision: `docker compose up -d` followed by `scripts/wait_ready.sh`, which polls
+`/readyz` until all dependencies (including the bucket) report up, with a timeout and
+diagnostics on failure. CI integration job uses the same script, so gate semantics are
+identical locally and in CI.
+Consequences: one extra command; readiness truth lives in the API rather than
+container heuristics.
+Rejected: dropping bucket-init into the API entrypoint (mixes infra concerns into app
+boot), `restart: always` on init (masks real failures).
+

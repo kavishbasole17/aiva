@@ -5,14 +5,15 @@ Living document. Sections marked **(pending Mx)** are declared gaps, not omissio
 ## Development quickstart
 
 ```bash
-docker compose up -d --wait
-curl -f http://localhost:18000/healthz
-curl -f http://localhost:18000/readyz
+docker compose up -d
+scripts/wait_ready.sh
 ```
 
 `readyz` returns 200 only when Postgres, Redis, and MinIO (including the
-`aiva-artifacts` bucket) are reachable. The bucket is created by the one-shot
-`minio-init` service.
+`aiva-artifacts` bucket) are reachable; `wait_ready.sh` polls it until green.
+Note: `docker compose up --wait` is deliberately not used — the one-shot
+`minio-init` bucket creator exits 0 on success and `--wait` reports that as a
+failure (see DECISIONS ADR-013).
 
 ## Services (dev)
 

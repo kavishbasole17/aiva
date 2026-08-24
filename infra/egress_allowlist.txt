@@ -7,3 +7,4 @@ apps/web-candidate/index.html::xmlns=
 compose.yaml::http://127\.0\.0\.1
 compose.yaml::http://minio:9000
 apps/api/tests/conftest.py::http://testserver
+scripts/wait_ready.sh::http://localhost

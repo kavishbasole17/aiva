@@ -81,7 +81,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Start stack
-        run: docker compose up --build --detach --wait
+        run: docker compose up --build --detach
+      - name: Wait for readiness
+        run: ./scripts/wait_ready.sh
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
