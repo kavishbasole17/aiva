@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: aiva-api
+Version: 0.1.0
+Summary: AIVA air-gapped recruitment platform API
+Requires-Python: <3.12,>=3.11
+Requires-Dist: fastapi<0.116,>=0.115
+Requires-Dist: uvicorn[standard]<0.33,>=0.32
+Requires-Dist: pydantic-settings<3,>=2.6
+Requires-Dist: structlog<25,>=24.4
+Requires-Dist: sqlalchemy[asyncio]<2.1,>=2.0.36
+Requires-Dist: asyncpg<0.31,>=0.30
+Requires-Dist: redis<6,>=5.2
+Requires-Dist: minio<8,>=7.2
+Requires-Dist: alembic<2,>=1.14
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: pytest-asyncio<0.25,>=0.24; extra == "dev"
+Requires-Dist: httpx<0.28,>=0.27; extra == "dev"
+Requires-Dist: asgi-lifespan<3,>=2.1; extra == "dev"
+Requires-Dist: ruff<0.8,>=0.7; extra == "dev"
+Requires-Dist: black<25,>=24.10; extra == "dev"
+Requires-Dist: mypy<1.14,>=1.13; extra == "dev"
+Requires-Dist: bandit<2,>=1.8; extra == "dev"
