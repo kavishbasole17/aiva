@@ -1,51 +1,50 @@
-# PLAN — Milestone 0: Foundation & Air-Gap Skeleton
+# PLAN — Status Ledger
 
-Status: **delivered, awaiting gate proof** (see bottom of file).
+## Delivered and CI-verified
 
-## Goal
+### Milestone 0 — Foundation
+Monorepo scaffold, healthchecked compose stack (Postgres 16 + pgvector/pg_trgm,
+Redis 7 AOF, MinIO + bucket init), API skeleton with liveness/readiness probes,
+fail-closed settings, strict CSP middleware, egress enforcement script (negative
+test proven), GitHub Actions pipeline. All six CI jobs green.
 
-Monorepo scaffold, dev infrastructure via Docker Compose, CI skeleton, egress
-enforcement, and the governance documents that constrain every later milestone.
-Gate: `docker compose up` all services healthy; CI green on GitHub Actions.
+### Milestone 1 — Design system
+`packages/ui`: tokens.css with atigro.com-sampled brand values (ADR-014), fluid
+type scale, motion tokens + spring constants, ThemeProvider (dark/light),
+`prefers-reduced-motion` collapse, Reveal/PageStagger one-shot scroll primitives,
+ScoreRing spring arc, Button/Input/Textarea/Card/Badge/EmptyState/Skeleton/Field,
+self-hosted OFL variable fonts via @fontsource (ADR-016). Both web apps consume
+the system; Tailwind 3.4 driven entirely by CSS custom properties. Lint/typecheck/
+build green locally and in CI.
 
-## Deliverables
+### Milestone 2 — Auth, RBAC, RLS, audit, org CRUD
+Argon2id passwords, JWT access tokens, refresh-token rotation with family-wide
+reuse detection, TOTP MFA enrollment/activation/login gating, six-role RBAC with
+per-endpoint permission dependencies, Postgres RLS (FORCE) scoped to organization
+with bootstrap-safe policies, app/migration DB role split, org/department/
+requisition/staff CRUD, hash-chained append-only audit log with verification
+endpoint. Proven in CI integration job: two-org RLS isolation, full role×endpoint
+authorization matrix, refresh replay revocation, MFA flow, chain integrity.
 
-1. Monorepo layout per the locked stack: `apps/{api,web-recruiter,web-candidate}`,
-   `services/{ai-gateway,worker,sandbox-runner}` (reserved), `packages/{ui,contracts,eval}`,
-   `infra/`, `scripts/`, `docs/`, `.github/workflows/`.
-2. Compose dev stack: Postgres 16 + pgvector + pg_trgm, Redis 7 (AOF), MinIO
-   (pinned server + pinned mc bucket-init one-shot), API container with healthcheck.
-3. API skeleton: `/healthz` liveness, `/readyz` probing Postgres / Redis / MinIO,
-   pydantic-settings fail-closed config, structured JSON logging, strict CSP +
-   security-header middleware. Unit tests run offline with deterministic dead-port
-   settings; integration tests gated behind `AIVA_INTEGRATION=1`.
-4. Web shells: React 18 + TS 5 (`strict`, `noUncheckedIndexedAccess`,
-   `exactOptionalPropertyTypes`), ESLint type-checked ruleset banning `any` and
-   absolute-URL string/template literals in source.
-5. Egress enforcement: `scripts/check_no_egress.sh` (deny-by-default,
-   allowlist-reviewed exceptions for loopback/internal references only) wired into CI.
-6. CI: egress scan, compose validation, web lint/typecheck/build, API
-   ruff/black/mypy-strict/bandit, unit tests, live-stack integration job.
-7. Governance docs: this plan, DECISIONS.md, RUNBOOK.md, MODEL_CARD.md.
+## Remaining milestones
 
-## Verification evidence
+| # | Milestone | Depends on |
+|---|---|---|
+| M3 | ai-gateway + local models + constrained decoding + eval harness scaffold | GPU hosts, model weights in image |
+| M4 | Resume ingest/spans, JD processing, matching, scoring, shortlisting | M2, M3 |
+| M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
+| M6 | Questionnaire builder + candidate portal + evaluation | M4 |
+| M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
+| M8 | LiveKit pre-check, consent, STT/TTS adaptive interview loop, HUD | M7 |
+| M9 | Sandbox runner, editor, whiteboard, screen share, task discussion | M8 |
+| M10 | RAG FAQ, evaluation engine, report + PDF/Excel export | M9 |
+| M11 | Dashboard + blind screening, bias audit, integrity signals, kits, DSAR | M10 |
+| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
 
-| Gate item | Status |
-|---|---|
-| `pnpm -r lint` | passed locally (both apps + contracts) |
-| `pnpm -r typecheck` / `build` | passed locally |
-| `ruff check apps/api` | passed locally |
-| `black --check apps/api` | passed locally |
-| `mypy --strict apps/api/app` | passed locally |
-| `pytest` unit suite | 10 passed, 2 integration-skipped locally |
-| `bandit -c pyproject.toml -r app` | 0 issues |
-| `scripts/check_no_egress.sh` positive | pass, 49 files scanned |
-| `scripts/check_no_egress.sh` negative | planted external URL → exit 1 (verified, then removed) |
-| `docker compose up --wait` healthy | pending local Docker install (WSL); proven in CI integration job |
-| GitHub Actions green | checked after push |
+## Known open items carried forward
 
-## Deliberately deferred
+- Local Docker Engine install in WSL pending operator action; compose stack is
+  proven via CI integration job meanwhile.
+- Coverage thresholds and golden-set content begin at M4 when scoring logic exists.
+- MinIO server-side encryption wires into KES/Vault at production hardening (ADR-008).
 
-Auth/RBAC, DB entities beyond the empty Alembic baseline, design tokens and all
-visual work (atigro.com colour sampling precedes M1), AI models and ai-gateway,
-LiveKit, sandbox runner internals, coverage thresholds, golden-set harness content.
