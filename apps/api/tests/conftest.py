@@ -14,6 +14,7 @@ OFFLINE_SETTINGS = {
     "AIVA_MINIO_ACCESS_KEY": "offline",
     "AIVA_MINIO_SECRET_KEY": "offline-secret",
     "AIVA_MINIO_BUCKET": "offline-bucket",
+    "AIVA_JWT_SECRET": "unit-test-jwt-secret-0123456789abcdef",
 }
 
 

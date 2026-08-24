@@ -5,6 +5,7 @@ description = "AIVA air-gapped recruitment platform API"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.115,<0.116",
+    "email-validator>=2.2,<3",
     "uvicorn[standard]>=0.32,<0.33",
     "pydantic-settings>=2.6,<3",
     "structlog>=24.4,<25",
@@ -14,6 +15,9 @@ dependencies = [
     "minio>=7.2,<8",
     "urllib3>=2.2,<3",
     "alembic>=1.14,<2",
+    "argon2-cffi>=23.1,<24",
+    "pyjwt>=2.9,<3",
+    "pyotp>=2.9,<3",
 ]
 
 [project.optional-dependencies]
@@ -41,10 +45,13 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "S", "RUF"]
+ignore = ["B008"]
+
+[tool.ruff.lint.flake8-bugbear]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
-"alembic/versions/*" = ["E501"]
+"tests/*" = ["S101", "S105", "S106"]
+"alembic/versions/*" = ["E501", "S608"]
 
 [tool.black]
 line-length = 100
