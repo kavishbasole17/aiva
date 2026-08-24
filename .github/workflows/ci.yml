@@ -84,6 +84,12 @@ jobs:
         run: docker compose up --build --detach
       - name: Wait for readiness
         run: ./scripts/wait_ready.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install -e ".[dev]"
+        working-directory: apps/api
       - name: Apply migrations
         working-directory: apps/api
         env:
@@ -95,12 +101,6 @@ jobs:
           AIVA_MINIO_BUCKET: aiva-artifacts
           AIVA_JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
         run: alembic upgrade head
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install test deps
-        run: pip install -e ".[dev]"
-        working-directory: apps/api
       - name: Readiness against live stack
         working-directory: apps/api
         env:
