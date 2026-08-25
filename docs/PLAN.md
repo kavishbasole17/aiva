@@ -75,11 +75,25 @@ scoring run). All 7 CI jobs green.
 Deferred within M5: Playwright E2E + axe audit wiring, 60fps trace capture,
 Lighthouse runs, command palette, saved views (M11/M12 hardening gates).
 
+### Milestone 6 (core) — Questionnaires, invites, autosave
+
+Questionnaire builder entities with validated question schemas (typed questions,
+unique ids, multiple-choice option rules), single-use SHA-256-tokenised candidate
+invites (raw token shown once at creation), resumable autosaved responses that
+append every save to a retained history snapshot list, deterministic
+required-answer completeness enforcement on submit, staff-facing response listing.
+Public endpoints are token-scoped; completed/expired links return 409/410.
+All 7 CI jobs green.
+
+Deferred within M6: AI evaluation of answers + resume-inconsistency flags (needs M3
+model deployment for meaningful output — the gateway contract exists), candidate
+portal UI pages, file-upload question storage.
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M6 | Questionnaire builder + candidate portal + evaluation | M4 |
+| M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
 | M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M6 | Questionnaire builder + candidate portal + evaluation | M4 |
 | M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
