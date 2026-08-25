@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -20,7 +21,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.backend = build_backend(
         settings.llm_backend, settings.vllm_base_url, settings.vllm_model
     )
-    app.state.prompts = PromptRegistry()
+    prompts_dir = Path(settings.prompts_dir) if settings.prompts_dir else None
+    app.state.prompts = PromptRegistry(prompts_dir)
     yield
 
 

@@ -1,7 +1,12 @@
 import hashlib
 from pathlib import Path
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+def default_prompts_dir() -> Path:
+    cwd_candidate = Path.cwd() / "prompts"
+    if cwd_candidate.is_dir():
+        return cwd_candidate
+    return Path(__file__).resolve().parent.parent / "prompts"
 
 
 class Prompt:
@@ -18,8 +23,8 @@ class Prompt:
 
 
 class PromptRegistry:
-    def __init__(self, directory: Path = PROMPTS_DIR) -> None:
-        self.directory = directory
+    def __init__(self, directory: Path | None = None) -> None:
+        self.directory = directory or default_prompts_dir()
         self._cache: dict[str, Prompt] | None = None
 
     def _load(self) -> dict[str, Prompt]:

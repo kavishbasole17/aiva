@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIVA_GATEWAY_", frozen=True, extra="ignore")
 
     llm_backend: str = "mock"
+    prompts_dir: str = ""
     vllm_base_url: str = ""
     vllm_model: str = "Qwen2.5-14B-Instruct-AWQ"
     log_level: str = "INFO"
