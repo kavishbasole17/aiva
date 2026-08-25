@@ -138,6 +138,25 @@ jobs:
           AIVA_MINIO_BUCKET: aiva-artifacts
           AIVA_MINIO_SECURE: "false"
         run: pytest tests/test_integration_readiness.py
+      - name: Domain lifecycles against live stack (auth, resume, questionnaire, interview)
+        working-directory: apps/api
+        env:
+          AIVA_INTEGRATION: "1"
+          AIVA_DATABASE_URL: postgresql+asyncpg://aiva_app:aiva_app_dev_only@localhost:15432/aiva
+          AIVA_ADMIN_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@localhost:15432/aiva
+          AIVA_JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
+          AIVA_REDIS_URL: redis://localhost:16379/0
+          AIVA_MINIO_ENDPOINT: localhost:19000
+          AIVA_MINIO_ACCESS_KEY: aiva_dev
+          AIVA_MINIO_SECRET_KEY: aiva_dev_only_change_me
+          AIVA_MINIO_BUCKET: aiva-artifacts
+          AIVA_MINIO_SECURE: "false"
+          AIVA_AI_GATEWAY_URL: http://localhost:19100
+        run: |
+          pytest tests/test_integration_auth.py
+          pytest tests/test_integration_resume.py
+          pytest tests/test_integration_questionnaire.py
+          pytest tests/test_integration_interview.py
       - name: Golden-set eval against gateway
         working-directory: packages/eval
         env:
