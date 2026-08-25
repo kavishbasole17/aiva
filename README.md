@@ -276,6 +276,66 @@ as empty stubs, with no functionality yet:
 - `services/ai-gateway`, `services/worker`, `services/sandbox-runner` — empty
   directories (`.gitkeep` only), reserved but not started.
 
+## AI gateway (`services/ai-gateway`) — Milestone 3
+
+A standalone FastAPI service (own `pyproject.toml`, same quality tooling as
+`apps/api`: ruff, black, mypy strict, bandit, pytest), configured via
+`AIVA_GATEWAY_*` env vars (`llm_backend`, defaulting to `mock`;
+`vllm_base_url`; `vllm_model`, defaulting to `Qwen2.5-14B-Instruct-AWQ`, the
+model recorded in `docs/MODEL_CARD.md`).
+
+- `app/contracts.py` — the gateway's stable response contract. `JudgementBase`
+  requires `rationale`, `confidence` (0–1), and `cited_span_ids` (at least
+  one) on every judgement; `DimensionScore` and `ResumeFieldExtraction`
+  extend it. This is a hard constraint (referenced in-code as "constraint
+  8.1"): **no AI output can exist without evidence it can be traced back
+  to** — this is the foundation for the "Evidence Spine" referenced in the
+  Milestone 5 roadmap entry.
+- `app/prompts.py` (`PromptRegistry`) — loads `.txt` prompt templates from
+  `services/ai-gateway/prompts/`, does simple `{{variable}}` substitution, and
+  computes a content-hash `version` for each prompt so every generation can
+  record exactly which prompt version produced it.
+- `prompts/dimension_score.txt` — the first real prompt, for scoring one
+  evaluation dimension against a job description. It explicitly instructs the
+  model: score only what the candidate's own documents/statements support,
+  cite at least one evidence span id, and never infer emotion, personality,
+  or confidence — a deliberate anti-hallucination/anti-bias guardrail baked
+  into the prompt itself.
+- `app/backends.py` — a pluggable `Backend` interface with two
+  implementations: `MockBackend` (deterministic, hash-seeded fake data that
+  still validates against the real response schema — lets the rest of the
+  system be built and tested before real models/hardware exist) and
+  `VllmBackend` (calls a real vLLM OpenAI-compatible endpoint using
+  **guided/constrained decoding** — passing the Pydantic JSON schema as
+  `guided_json` — with `temperature=0` and a deterministic seed for
+  reproducibility; validates the model's response against the same schema and
+  raises a clear error if the model breaks contract). `GenerationResult`
+  records the `prompt_version`, `backend`, and `model_id` alongside every
+  generated result, giving full provenance for any AI output.
+
+`app/main.py` assembles a real, running FastAPI app (`create_app()`, same
+`docs_url=None`/`openapi_url="/openapi.json"` pattern as `apps/api`) exposing:
+
+- `GET /healthz`
+- `GET /prompts` — lists every loaded prompt with its content-hash version
+- `POST /v1/generate` — the core endpoint: given a `prompt_id`, a
+  `response_model` name, template `inputs`, and a `seed_key`, it renders the
+  prompt, runs it through the configured backend (mock or vLLM), validates
+  the result against the response contract, and returns the data plus its
+  `prompt_version`/`backend`/`model_id` provenance. Missing template inputs,
+  an unknown prompt, or an unknown response model all return clear 400/404
+  errors rather than failing silently.
+
+`apps/api/tests/test_gateway.py`-equivalent tests (in
+`services/ai-gateway/tests/`) prove the mock backend is genuinely
+deterministic: the same request repeated returns byte-identical output, and
+changing an input (e.g. the dimension being scored) changes the output
+accordingly.
+
+Not yet done: no `Dockerfile`, and this service is not wired into
+`compose.yaml` or called by the main API yet — it runs and is tested in
+isolation but isn't part of the integrated stack.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request, as
@@ -354,6 +414,40 @@ the candidate model for each planned capability, to be finalized as each lands:
 
 Licensing rule: Apache-2.0/MIT preferred; anything under a bespoke community
 license is flagged for human legal review before integration.
+
+## Full roadmap (per docs/PLAN.md)
+
+`docs/PLAN.md` was restructured into a status ledger. Milestones 0–2 are
+listed as "Delivered and CI-verified." **Note on that claim**: for Milestone
+2 specifically, PLAN.md states the full authorization matrix, refresh-replay
+revocation, MFA flow, and chain integrity are "proven in CI integration job"
+— but as of this update, `.github/workflows/ci.yml`'s `integration` job still
+only runs `tests/test_integration_readiness.py`, not `test_integration_auth.py`
+(see above). This README defers to the directly-observed CI config over the
+planning document's claim; treat Milestone 2's CI verification status as
+unconfirmed until the workflow file itself runs that test.
+
+Remaining milestones and their dependencies:
+
+| # | Milestone | Depends on |
+|---|---|---|
+| M3 | AI gateway, local models, constrained decoding, eval harness scaffold | GPU hosts, model weights in image |
+| M4 | Resume ingest/parsing, job-description processing, matching, scoring, shortlisting | M2, M3 |
+| M5 | Recruiter console: pipeline board, candidate detail, "Evidence Spine" v1 | M1, M4 |
+| M6 | Questionnaire builder, candidate portal, evaluation | M4 |
+| M7 | Scheduling, availability rules, .ics calendar files, SMTP reminders | M6 |
+| M8 | LiveKit pre-check/consent, STT/TTS adaptive interview loop, live HUD | M7 |
+| M9 | Sandbox runner, code editor, whiteboard, screen share, task discussion | M8 |
+| M10 | RAG-based FAQ, evaluation engine, report generation (PDF/Excel export) | M9 |
+| M11 | Dashboard, blind screening, bias audit, integrity signals, DSAR tooling | M10 |
+| M12 | Load testing, penetration-test pass, data-retention jobs, Helm chart | M11 |
+
+Open items carried forward in PLAN.md: local Docker Engine install on the
+developer's WSL machine is still pending (the compose stack is currently only
+proven via the CI integration job, not locally); test-coverage thresholds and
+golden-set evaluation content begin at M4; MinIO encryption-at-rest is wired
+at M12 (see ADR-008 above). M12's Helm chart also confirms the intended
+production deployment target is Kubernetes.
 
 ## Milestone 0 verification evidence
 

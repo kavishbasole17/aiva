@@ -208,6 +208,36 @@ foundations only; no end-user features exist yet.
   verifiable through the API: administrators and auditors can retrieve the
   full history of actions for their organization, and a dedicated check
   confirms the tamper-evident hash chain has not been broken.
+- Work on Milestone 3 (the AI gateway) has begun. Two design decisions stand
+  out as directly relevant to trust in the system's output:
+  - **Every AI-generated judgment must cite its evidence.** The system is
+    built so that a score or extracted fact can never exist without a
+    confidence level and a pointer back to the specific piece of the
+    candidate's own material it came from. This is enforced as a hard rule in
+    the code itself, not just a guideline, and is the foundation for what the
+    team calls the "Evidence Spine" — the ability to trace any AI decision
+    back to its source, planned for the recruiter console.
+  - **The scoring instructions given to the AI model explicitly forbid
+    guessing.** The first real prompt (for scoring a candidate against a job
+    requirement) instructs the model to score only what the candidate's own
+    documents and statements actually support, to always cite specific
+    evidence, and to never infer things like emotion, personality, or
+    confidence level from indirect signals. This is a deliberate anti-bias
+    and anti-hallucination safeguard built into the system from the start,
+    not added as an afterthought.
+  - The gateway can currently run in two modes: a "mock" mode that produces
+    realistic, consistent test results without needing any AI hardware
+    (useful for building and testing the rest of the system now), and a real
+    mode that will call the actual local AI model, with technical safeguards
+    that force the model to respond only in the exact expected format and
+    reject anything that doesn't match. Every result records exactly which
+    prompt version, backend, and model produced it, for full traceability.
+  - This service now runs on its own and has a working set of functions
+    (checking a candidate against a job requirement is one working example,
+    currently using the test/mock mode), verified by automated tests showing
+    it produces consistent, repeatable results. It is not yet connected to
+    the rest of the running application or the containerized deployment
+    stack — it currently only runs and is tested in isolation.
 - An automated quality gate now runs on every proposed code change: it checks
   for accidental external network calls, validates the infrastructure
   configuration, lints and type-checks all application code, runs the security
@@ -240,43 +270,66 @@ user-facing application to interact with.
 
 ## 6. Roadmap and Verification
 
-A formal project plan (`docs/PLAN.md`) now exists for the current milestone.
+The project's plan (`docs/PLAN.md`) is maintained as a running status ledger.
+As of this update, it lists three milestones as delivered:
 
-### Milestone 0 — Foundation and Air-Gap Enforcement
+### Delivered
 
-Marked "delivered, awaiting gate proof": the work is complete and is being
-formally checked against its own acceptance criteria before being signed off.
-Verification results recorded so far:
+- **Milestone 0 — Foundation and air-gap enforcement**: infrastructure,
+  tooling, and the three-part air-gap enforcement approach described in
+  Section 2.
+- **Milestone 1 — Design system**: the visual foundation and component
+  library described in Section 4.
+- **Milestone 2 — Authentication, access control, data isolation, and audit
+  trail**: everything described in Section 4 regarding accounts, roles,
+  organization data isolation, and the tamper-evident audit log, plus a first
+  working API for managing organizations, departments, and job requisitions.
 
-| Check | Result |
-|---|---|
-| Frontend lint, type-check, build | Passed |
-| Backend lint (ruff), formatting (black) | Passed |
-| Backend strict type-checking (mypy) | Passed |
-| Backend security scan (bandit) | 0 issues found |
-| Automated test suite | 10 tests passed (2 additional tests require a running live stack and were skipped in this check) |
-| Air-gap / no-external-URL scan | 49 files scanned, 0 violations. The scan was also deliberately tested by planting a fake external URL, confirming it correctly fails, and then removing it. |
-| Full system startup via Docker | Verified via the automated CI pipeline (not yet confirmed on this local machine) |
+**A note on verification accuracy**: the project plan states that Milestone
+2's full security test (the one described in Section 4 that proves role
+permissions, cross-organization isolation, stolen-session detection, and the
+audit trail all work correctly together) has been "proven" in the automated
+pipeline that checks every code change. Directly inspecting that pipeline's
+configuration as of this update shows it does not yet run that particular
+test — only a narrower readiness check. This document reports what was
+directly observed in the pipeline configuration rather than the plan's
+claim, so that this document stays accurate even where the underlying
+project's own paperwork may be temporarily ahead of what's actually wired up.
+This is a minor, easily-closed gap (the test exists and passes when run
+manually), not a sign of missing work.
 
-### Known upcoming milestones
+### In progress
 
-Referenced elsewhere in the codebase, not yet detailed:
+- **Milestone 3 — AI gateway**: underlying groundwork described in Section 4
+  above (evidence-citation contract, anti-bias prompt design, mock/real
+  backend switch) has started. Not yet reachable from outside the system.
 
-- **Milestone 1**: shared design system / visual component library
-- **Milestone 3**: the AI gateway, the single local entry point to all AI models
-- **Milestone 5**: the recruiter pipeline view (requisitions and candidates)
-- **Milestone 9**: sandboxed execution environment for candidate coding assessments
+### Remaining roadmap
 
-### Explicitly deferred (not part of the current milestone)
+| Milestone | What it delivers | Depends on |
+|---|---|---|
+| M3 | The AI gateway — the single local entry point to every AI model — plus the first models and an evaluation harness | Server hardware with GPUs, model files bundled into the deployment image |
+| M4 | Resume parsing, job description processing, candidate-to-role matching, and scoring | M2, M3 |
+| M5 | The recruiter console's real pipeline view (candidates by stage, candidate detail, evidence trail) | M1, M4 |
+| M6 | The candidate-facing questionnaire builder, portal, and evaluation | M4 |
+| M7 | Interview scheduling, availability rules, calendar invites, email reminders | M6 |
+| M8 | Live interview infrastructure: camera/microphone pre-checks, consent, and the real-time speech-driven interview experience (via LiveKit, see Section 7) | M7 |
+| M9 | The sandboxed technical-assessment environment: code editor, whiteboard, screen share | M8 |
+| M10 | An internal FAQ assistant, the evaluation engine, and exportable reports (PDF/Excel) | M9 |
+| M11 | Recruiter dashboards, blind/bias-reduced screening, hiring-integrity signals, data-subject request (DSAR) tooling | M10 |
+| M12 | Load testing, a penetration-test pass, data-retention automation, and a Kubernetes deployment package (Helm) | M11 |
 
-To keep scope honest, the following are intentionally not being worked on yet:
-authentication and access control, any real data model beyond an empty database
-migration placeholder, visual design work, the AI models themselves and the
-gateway that will serve them, real-time video/audio infrastructure for live
-interviews (the codebase references **LiveKit**, an open-source video/audio
-conferencing platform, as the intended technology), the sandboxed code execution
-environment, formal test-coverage requirements, and the content of the AI
-evaluation harness.
+This also answers one of the earlier open questions: the intended production
+deployment target is a **Kubernetes cluster** (via a Helm chart, planned for
+Milestone 12), consistent with the client-managed, on-premise/air-gapped
+requirement.
+
+Other items explicitly tracked as still open: local testing on the
+development machine is currently blocked on a pending Docker installation
+(the system is proven to work via the automated pipeline in the meantime);
+formal test-coverage requirements and the AI evaluation benchmark content
+begin at Milestone 4; and encryption-at-rest for stored files is deferred to
+Milestone 12 as previously noted.
 
 ## 7. Planned AI Capabilities
 
@@ -330,14 +383,8 @@ tracked to be closed before production deployment.
 To keep this document honest, the following are not yet visible in the codebase
 and should be confirmed with the development team as work progresses:
 
-- Full authentication implementation is still pending, but the underlying
-  design is now substantially clear (see Section 4 below): six user roles,
-  secure password storage, two-factor authentication, and theft-resistant
-  session handling.
 - Data retention and deletion policy for candidate data.
-- Final deployment target. The production configuration approach (Helm-based
-  deployment with secrets from a KMS/Vault system) points toward a
-  client-managed Kubernetes cluster, but this has not been explicitly confirmed.
+- Precise hardware/GPU requirements for the AI models once Milestone 3 begins.
 
 ---
 

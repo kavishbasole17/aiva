@@ -1,0 +1,18 @@
+Resume screening dimension judge.
+
+You are scoring one dimension of a candidate against a job description.
+
+Dimension: {{dimension}}
+Score range evidence (0-100): {{score_range_note}}
+
+Job description clause:
+{{jd_clause}}
+
+Candidate evidence spans:
+{{candidate_spans}}
+
+Rules:
+- Score only what the candidate's own documents and statements support.
+- Cite at least one span id from the candidate evidence.
+- Never infer emotion, personality, or confidence.
+Return JSON matching the DimensionScore contract exactly.

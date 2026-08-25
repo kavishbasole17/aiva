@@ -61,6 +61,29 @@ jobs:
       - name: Bandit
         run: bandit -c pyproject.toml -r app
 
+  gateway-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check .
+      - name: Black
+        run: black --check .
+      - name: Mypy
+        run: mypy --strict app
+      - name: Bandit
+        run: bandit -c pyproject.toml -r app
+      - name: Unit tests
+        run: pytest
+
   api-tests:
     runs-on: ubuntu-latest
     defaults:
@@ -115,6 +138,13 @@ jobs:
           AIVA_MINIO_BUCKET: aiva-artifacts
           AIVA_MINIO_SECURE: "false"
         run: pytest tests/test_integration_readiness.py
+      - name: Golden-set eval against gateway
+        working-directory: packages/eval
+        env:
+          AIVA_EVAL_GATEWAY_URL: http://localhost:19100
+        run: |
+          pip install -e ".[dev]"
+          pytest tests/test_golden_set.py
       - name: Tear down
         if: always()
         run: docker compose down --volumes
