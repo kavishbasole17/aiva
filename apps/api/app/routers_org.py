@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import record_event
 from app.deps import get_db, require_roles
 from app.models import Department, Organization, Requisition, RequisitionStatus, Role, User
+from app.validation import EmailAddress
 
 router = APIRouter(tags=["orgs"])
 
@@ -27,7 +28,7 @@ class DepartmentCreate(BaseModel):
 
 
 class StaffUserCreate(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     password: str = PydField(min_length=12)
     role: Role
 

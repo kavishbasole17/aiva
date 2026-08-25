@@ -3,7 +3,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from app.questionnaire_service import (
     missing_required_answers,
     validate_questions,
 )
+from app.validation import EmailAddress
 
 router = APIRouter(tags=["questionnaires"])
 
@@ -46,7 +47,7 @@ class QuestionnaireCreate(BaseModel):
 
 
 class InviteCreate(BaseModel):
-    candidate_email: EmailStr
+    candidate_email: EmailAddress
 
 
 class ResponseUpsert(BaseModel):

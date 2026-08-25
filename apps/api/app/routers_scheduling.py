@@ -2,7 +2,7 @@ import uuid
 from datetime import date, time
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from app.deps import get_db, require_roles
 from app.ics import build_ics
 from app.models import InterviewSlot, Role, User
 from app.scheduling import AvailabilityRule, generate_slots
+from app.validation import EmailAddress
 
 router = APIRouter(tags=["scheduling"])
 
@@ -35,7 +36,7 @@ class SlotGenerationRequest(BaseModel):
 
 
 class BookingRequest(BaseModel):
-    candidate_email: EmailStr
+    candidate_email: EmailAddress
 
 
 async def _load_requisition(db: AsyncSession, user: User, rid: uuid.UUID) -> None:
