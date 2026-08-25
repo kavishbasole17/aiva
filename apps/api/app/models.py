@@ -271,6 +271,86 @@ class InterviewSlot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class InterviewSessionStatus(StrEnum):
+    PENDING_CONSENT = "pending_consent"
+    CONSENT_GRANTED = "consent_granted"
+    PRECHECK_PASSED = "precheck_passed"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ABORTED = "aborted"
+    DECLINED = "declined"
+
+
+class InterviewSession(Base):
+    __tablename__ = "interview_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    requisition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("requisitions.id"), index=True
+    )
+    slot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("interview_slots.id"), index=True
+    )
+    resume_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resume_documents.id")
+    )
+    candidate_email: Mapped[str] = mapped_column(String(320))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(
+        String(24), default=InterviewSessionStatus.PENDING_CONSENT.value
+    )
+    plan_payload: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
+    plan_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    precheck_report: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
+    precheck_passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    asked_turns: Mapped[list[dict[str, object]]] = mapped_column(JSONB, default=list)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InterviewTurn(Base):
+    __tablename__ = "interview_turns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("interview_sessions.id"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(16))
+    topic_id: Mapped[str | None] = mapped_column(String(64))
+    question_text: Mapped[str] = mapped_column(Text)
+    answer_text: Mapped[str | None] = mapped_column(Text)
+    stt_confidence: Mapped[float | None] = mapped_column(Float)
+    stt_model_id: Mapped[str | None] = mapped_column(String(128))
+    tts_model_id: Mapped[str | None] = mapped_column(String(128))
+    answer_audio_sha256: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InterviewConsent(Base):
+    __tablename__ = "interview_consents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("interview_sessions.id"), index=True
+    )
+    granted: Mapped[bool] = mapped_column(Boolean)
+    consent_text_version: Mapped[str] = mapped_column(String(32))
+    statement_snapshot: Mapped[str] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

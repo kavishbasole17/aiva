@@ -9,6 +9,7 @@ from app.health import router as health_router
 from app.logging_setup import configure_logging
 from app.routers_audit import router as audit_router
 from app.routers_auth import router as auth_router
+from app.routers_interview import router as interview_router
 from app.routers_org import router as org_router
 from app.routers_questionnaire import router as questionnaire_router
 from app.routers_resume import router as resume_router
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(resume_router)
     app.include_router(questionnaire_router)
     app.include_router(scheduling_router)
+    app.include_router(interview_router)
     app.include_router(audit_router)
     return app
 
