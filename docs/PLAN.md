@@ -26,11 +26,27 @@ requisition/staff CRUD, hash-chained append-only audit log with verification
 endpoint. Proven in CI integration job: two-org RLS isolation, full role×endpoint
 authorization matrix, refresh replay revocation, MFA flow, chain integrity.
 
+### Milestone 3 — AI gateway (mock-verified; GPU inference deferred to deployment)
+
+`services/ai-gateway`: stable typed contract (`DimensionScore`,
+`ResumeFieldExtraction` — every judgement carries rationale, confidence, and
+mandatory cited span ids per constraint 8.1), versioned prompt registry
+(SHA-truncated prompt versions returned with every response), pluggable backends:
+deterministic mock (schema-filling, seed-keyed, CI-safe) and vLLM backend using
+`guided_json` constrained decoding with temperature 0 and pinned seed so schema-
+invalid output is impossible by construction. Golden-set eval harness
+(`packages/eval`) runs against the live container in CI: schema validity +
+determinism asserted per case. Gateway quality gates green (ruff/black/mypy-strict/
+bandit/pytest); all 7 CI jobs green.
+
+Deferred to GPU deployment: pulling Qwen2.5-14B-AWQ weights into the runtime image,
+the §13 `--network none` end-to-end interview proof, and real-model eval thresholds.
+The backend interface does not change when those land.
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M3 | ai-gateway + local models + constrained decoding + eval harness scaffold | GPU hosts, model weights in image |
 | M4 | Resume ingest/spans, JD processing, matching, scoring, shortlisting | M2, M3 |
 | M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M6 | Questionnaire builder + candidate portal + evaluation | M4 |
