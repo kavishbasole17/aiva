@@ -9,6 +9,8 @@ app/backends.py
 app/contracts.py
 app/logging_setup.py
 app/main.py
+app/media.py
 app/prompts.py
 app/settings.py
 tests/test_gateway.py
+tests/test_media.py

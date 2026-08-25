@@ -49,6 +49,13 @@ target-version = ["py311"]
 strict = true
 python_version = "3.11"
 
+# Optional speech backends are imported lazily inside their constructors and
+# raise a clear RuntimeError when weights/packages are absent (ADR-017);
+# their absence at static time is expected, not an error.
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*", "piper.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     prompts_dir: str = ""
     vllm_base_url: str = ""
     vllm_model: str = "Qwen2.5-14B-Instruct-AWQ"
+    stt_backend: str = "mock"
+    stt_model: str = "faster-whisper-large-v3"
+    tts_backend: str = "mock"
+    tts_voice: str = "piper-onnx-en_US-lessac-medium"
     log_level: str = "INFO"
 
 

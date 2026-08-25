@@ -9,6 +9,15 @@ from pydantic import BaseModel, Field
 from app.backends import Backend, GenerationResult, PromptRegistry, build_backend
 from app.contracts import get_response_model
 from app.logging_setup import configure_logging
+from app.media import (
+    MAX_SYNTH_CHARS,
+    MediaError,
+    SpeechProvider,
+    TranscriptionProvider,
+    build_speaker,
+    build_transcriber,
+    decode_audio,
+)
 from app.settings import Settings, get_settings
 
 
@@ -21,6 +30,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.backend = build_backend(
         settings.llm_backend, settings.vllm_base_url, settings.vllm_model
     )
+    app.state.stt = build_transcriber(settings.stt_backend, settings.stt_model)
+    app.state.tts = build_speaker(settings.tts_backend, settings.tts_voice)
     prompts_dir = Path(settings.prompts_dir) if settings.prompts_dir else None
     app.state.prompts = PromptRegistry(prompts_dir)
     yield
@@ -54,6 +65,15 @@ class GenerateResponse(BaseModel):
     model_id: str
 
 
+class SttRequest(BaseModel):
+    audio_b64: str = Field(min_length=1)
+    language: str = Field(default="en", min_length=2, max_length=16)
+
+
+class TtsRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_SYNTH_CHARS)
+
+
 router = APIRouter()
 
 
@@ -67,6 +87,34 @@ async def list_prompts(request: Request) -> dict[str, object]:
     registry: PromptRegistry = request.app.state.prompts
     prompts = [{"id": pid, "version": registry.get(pid).version} for pid in registry.list_ids()]
     return {"prompts": prompts}
+
+
+@router.get("/media-backends")
+async def media_backends(request: Request) -> dict[str, object]:
+    stt: TranscriptionProvider = request.app.state.stt
+    tts: SpeechProvider = request.app.state.tts
+    return {
+        "stt": {"provider": type(stt).__name__, "model_id": stt.model_id},
+        "tts": {"provider": type(tts).__name__, "model_id": tts.model_id},
+    }
+
+
+@router.post("/v1/stt")
+async def stt(body: SttRequest, request: Request) -> dict[str, object]:
+    try:
+        audio = decode_audio(body.audio_b64)
+    except MediaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    transcriber: TranscriptionProvider = request.app.state.stt
+    result = await transcriber.transcribe(audio, body.language)
+    return result.model_dump()
+
+
+@router.post("/v1/tts")
+async def tts(body: TtsRequest, request: Request) -> dict[str, object]:
+    speaker: SpeechProvider = request.app.state.tts
+    result = await speaker.synthesize(body.text)
+    return result.model_dump()
 
 
 @router.post("/v1/generate", response_model=GenerateResponse)
