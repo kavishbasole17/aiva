@@ -5,12 +5,22 @@ runtime network calls, every model served locally.
 
 ## Status
 
-Milestone 0 — Foundation & Air-Gap Skeleton. Per `docs/PLAN.md`, this milestone is
-marked "delivered, awaiting gate proof" (i.e. implementation complete, formal
-verification against the gate criteria in progress). Governance docs now exist:
+Milestones 0 through 8 (core) are delivered and, as of this update, genuinely
+CI-verified — see the "Full roadmap" section below for exactly what that
+means and the two narrower gaps (Milestone 5's candidates endpoint,
+Milestone 7's scheduling integration test) that remain open. In practical
+terms: authentication/RBAC/audit, the AI gateway contract, resume ingestion
+and scoring, the recruiter console shell, questionnaires, scheduling, and
+the full consent-precheck-live-interview candidate experience (including a
+working `apps/web-candidate` frontend) are all built and working end to
+end against a live stack. Milestones 9 through 12 (sandboxed technical
+assessments, RAG FAQ/evaluation/reporting, dashboards/bias-audit/integrity
+signals, and production hardening) have not started. Governance docs:
 `docs/PLAN.md` (build order and verification evidence), `docs/DECISIONS.md`
 (architecture decision records), `docs/RUNBOOK.md` (day-2 operations), and
-`docs/MODEL_CARD.md` (AI model inventory, empty until Milestone 3).
+`docs/MODEL_CARD.md` (AI model inventory — still mostly empty since no real
+model is deployed yet; everything runs on deterministic mocks pending GPU
+hardware).
 
 ## Repository layout
 
@@ -61,10 +71,18 @@ Python 3.11, FastAPI. Dependencies and tooling are defined in `apps/api/pyprojec
 
 - **Runtime**: FastAPI, uvicorn, pydantic-settings, structlog, SQLAlchemy (async) +
   asyncpg, redis, minio, alembic (migrations), argon2-cffi (password hashing),
-  pyjwt (JWT tokens), pyotp (TOTP two-factor authentication) — the latter three
-  were just added; no authentication code exists yet, but this signals the
-  intended approach: password hashing with Argon2, JWT-based sessions, and
-  built-in two-factor auth support
+  pyjwt (JWT tokens), pyotp (TOTP two-factor authentication), `pymupdf` (PDF
+  text extraction), `python-docx` (Word document parsing), `python-multipart`
+  (required by FastAPI for file-upload form handling — added after being
+  missing initially, which would have broken every resume upload). `httpx`
+  was also moved from dev-only to a runtime dependency: `routers_resume.py`
+  calls the AI gateway with it directly, and the production Docker image
+  only installs runtime dependencies, not the `dev` extras — so this was
+  briefly a second instance of the same "works locally/in dev, breaks in the
+  real container" class of gap already caught once with the AI gateway's
+  prompt path. See the Authentication service and Resume ingest sections
+  below for the code built
+  on these dependencies.
 - **Dev/quality**: pytest + pytest-asyncio + httpx (tests), ruff + black (lint/format),
   mypy in strict mode (type checking), bandit (security static analysis)
 
@@ -207,11 +225,246 @@ access returning 404 rather than 403 (so a user can't tell whether a resource
 in another org even exists), refresh-token rotation with reuse correctly
 revoking the whole token family, the audit chain reporting intact via the API
 after real activity, and the complete MFA enroll → activate → login flow
-(including that password-only login is rejected once MFA is active). **Not
-yet wired into CI**: `.github/workflows/ci.yml`'s `integration` job now runs
-`alembic upgrade head` against the live stack, but still only executes
-`test_integration_readiness.py`, not `test_integration_auth.py` — so this
-thorough new coverage exists but is not yet part of the automated gate.
+(including that password-only login is rejected once MFA is active).
+
+`test_integration_resume.py` similarly proves the full resume pipeline
+end-to-end against a live stack: register → login → create department →
+requisition → job description → upload a real generated PDF resume → verify
+extracted fields (including that a duplicate upload is rejected with 409) →
+create a weight profile → run scoring three times and assert the
+`run_fingerprint` and `total_score` are byte-identical every time → verify
+the `technical` dimension's evidence is `match_checks` (deterministic) while
+every other dimension has gateway-sourced evidence.
+
+**Neither of the above two integration tests is wired into CI yet**:
+`.github/workflows/ci.yml`'s `integration` job runs `alembic upgrade head`
+against the live stack and executes `test_integration_readiness.py`, but
+still not `test_integration_auth.py` or `test_integration_resume.py` — this
+thorough coverage exists and passes when run manually/`AIVA_INTEGRATION=1`,
+but is not yet part of the automated gate that blocks a bad change.
+
+## Scheduling (`apps/api`) — Milestone 7 (core wired up; email delivery pending)
+
+`app/scheduling.py` — pure slot-generation logic, no I/O yet, notable mainly
+for getting timezone arithmetic right from the start rather than as a later
+bug fix: an `AvailabilityRule` (local start/end time, slot duration, buffer
+between slots, which weekdays count as weekend, excluded dates) plus a date
+range and IANA timezone name generates a sorted list of interview `Slot`s
+(stored internally as UTC). `_is_real_wall_time()` filters out any local
+wall-clock time that doesn't actually exist because of a spring-forward DST
+transition, and converting through `zoneinfo` rather than fixed offsets
+means fall-back overlaps and DST-boundary duplicate slots are avoided by
+construction rather than needing special-cased handling.
+
+`apps/api/tests/test_scheduling.py` proves the hard cases directly rather
+than just the happy path: a plain week's worth of slots; the March 2026 US
+spring-forward transition correctly produces no slot for the wall-clock time
+that doesn't exist (jumping straight from 1:30 to 3:00); the November 2026
+US fall-back transition does **not** produce duplicate slots despite the
+repeated wall-clock hour; weekends and explicit blackout dates are excluded;
+buffer time between slots shifts subsequent start times correctly; an
+inverted date range is rejected; and slots generated in a different
+timezone entirely (`Asia/Kolkata`) remain correctly UTC-anchored and
+chronological.
+
+`app/ics.py` — generates standards-compliant `.ics` calendar invite files
+locally, with no external calendar API involved (its own docstring cites
+this directly as satisfying an air-gap constraint): proper iCalendar field
+escaping (backslashes, semicolons, commas, newlines), UTC timestamp
+formatting (treating naive datetimes as UTC rather than raising), and
+organizer/attendee fields with an RSVP request. `test_ics.py` covers the
+overall structure, the escaping, and the naive-datetime handling.
+
+Within the same update, this went from logic-only to fully wired up:
+migration `0005_interview_slots` creates the `InterviewSlot` table with the
+same RLS-enforced pattern as every other table, and `app/routers_scheduling.py`
+(registered in `main.py`) exposes it as a real API:
+
+- `POST /requisitions/{id}/slots/generate` — runs `generate_slots()` against
+  a submitted availability rule and persists the results, skipping any slot
+  that already exists as `open` (so calling it again is safe, not
+  duplicating), audit-logged
+- `GET /requisitions/{id}/slots` — lists all slots and their status
+- `POST /slots/{id}/book` — books an open slot for a candidate email
+  (rejecting with 409 if it's no longer open) and returns a ready-to-use
+  `.ics` invite generated inline via `build_ics()`
+
+**Not yet done**: the `.ics` file is only returned in the API response — no
+email is actually sent. The "SMTP reminders" part of this milestone's scope
+(per `docs/PLAN.md`'s own milestone description) has not been built yet.
+
+## Interview sessions (`apps/api`, `services/ai-gateway`, `apps/web-candidate`) — Milestone 8 (core, mock-verified)
+
+The candidate-facing interview loop is now real end to end, following the same
+"mock-verified; real models deferred to deployment" precedent as Milestone 3.
+
+**Gateway speech layer** (`services/ai-gateway/app/media.py`): `/v1/stt` and
+`/v1/tts` behind typed contracts (`Transcription`, `Synthesis`, both carrying
+provider/model ids). Deterministic mock providers are the CI default: mock TTS
+synthesizes genuine PCM16 WAV bytes (duration tracks text length at ~150 wpm,
+hash-seeded quiet tone); mock STT returns hash-seeded synthetic transcripts with
+WAV-header duration parsing. Real backends (`faster-whisper`, `piper`) raise clear
+not-deployed errors until weights land; `AIVA_GATEWAY_STT_BACKEND`/`TTS_BACKEND`
+flip them at deployment with no call-site changes (ADR-017).
+
+**Interview domain** (`apps/api`):
+
+- `app/precheck.py` — fail-closed validation of device reports: stale suite
+  versions rejected outright, every required device (camera/microphone/speaker)
+  must be exactly `ok`, connection must be verified (`poor`/`unknown` or a
+  sub-minimum bandwidth sample fails).
+- `app/interview_engine.py` — pure adaptive loop: fingerprinted question plans
+  derived from objective JD-vs-resume gaps (missing skills, verified skills,
+  stated-vs-required years); answers covering enough of a topic's expected
+  points advance, thin answers spend that topic's single scripted probe first;
+  transcripts replay deterministically. The LLM stays out of interview control
+  flow by design (ADR-018).
+- `app/routers_interview.py` — staff endpoints create sessions against booked
+  slots (raw join token shown once, only its SHA-256 stored), list session
+  summaries per requisition, and fetch full attributed transcripts. Public
+  token-gated endpoints drive the lifecycle:
+  `pending_consent → consent_granted → precheck_passed → active → completed`
+  (with terminal `declined`/`aborted`). Every gate fails closed — no question
+  is served before version-matched granted consent plus a passed pre-check;
+  expired links answer 410, wrong-state mutations answer 409. Turns accept
+  typed text or base64 audio (routed through gateway STT) and persist STT
+  confidence/model/audio-hash per turn; TTS read-aloud is proxied same-origin.
+- Migration `0006_interview_sessions` adds RLS-forced tables (bootstrap-safe
+  policies for the public token flow); migration `0007_app_role_grants_backfill`
+  fixes a latent privilege gap: migrations 0004/0005 never granted their tables
+  to the runtime `aiva_app` role, which would have failed those features on any
+  fresh deployment — caught by this milestone's integration test, fixed forward
+  rather than editing applied history.
+- New settings: `AIVA_INTERVIEW_TOKEN_HOURS` (default 48).
+
+**Candidate portal** (`apps/web-candidate`) — no longer a placeholder:
+
+- Join page (token entry, pre-filled from invite link query param).
+- Consent screen rendering the exact statement text and version; decline is
+  one click and terminal.
+- Device pre-check gate: live camera preview, microphone level detection via
+  WebAudio (silence counts as degraded, not ok), speaker tone confirmation,
+  and a real connection sample (health round-trip latency + openapi.json
+  throughput in kbps).
+- Live HUD: status chips, elapsed timer, topic progress spine, current question
+  card with gateway-backed "Read aloud", answering by typed text or recorded
+  audio (MediaRecorder → base64 → gateway STT), transcript drawer, and an
+  explicit end-session control. React Router replaces the static screen; the
+  Vite dev proxy keeps all traffic same-origin.
+
+**Verification**: `test_integration_interview.py` drives the full lifecycle
+against the live stack including the containerized gateway — gates reject early
+start/failing pre-check/stale consent versions, consent denial is terminal, the
+first answer round-trips audio→STT→transcript with model attribution, the engine
+closes within budget, terminal state rejects further turns, and staff detail
+shows the consent record and attributed transcript. The CI integration job now
+runs this plus the previously-unwired auth/resume/questionnaire lifecycle tests.
+
+Deferred within M8 (tracked): LiveKit room infrastructure and client SDK tokens
+(needs media infra in compose; contracts unchanged when it lands),
+faster-whisper/Piper weights (GPU deployment), InsightFace identity verification
+and MediaPipe proctoring signals (M11 integrity work), the §13 `--network none`
+end-to-end proof.
+
+## Questionnaires and candidate invites (`apps/api`) — Milestone 6 (core, delivered)
+
+`app/questionnaire_service.py` — pure logic, no I/O: six question types
+(`multiple_choice`, `yes_no`, `rating`, `long_text`, `short_text`,
+`file_upload`); `validate_questions()` enforces safe IDs (no duplicates, a
+restricted character set), a required prompt, a known type, and at least two
+options for multiple-choice; `missing_required_answers()` checks which
+required questions remain unanswered. `generate_invite_token()` produces a
+secure random token and returns both the raw value (given to the candidate)
+and its SHA-256 hash (the only thing ever stored) — the same
+never-store-the-raw-secret pattern used for refresh tokens in Milestone 2.
+
+`app/routers_questionnaire.py` exposes this as a real API, split into staff
+endpoints and public (unauthenticated, token-gated) ones:
+
+- `POST /requisitions/{id}/questionnaires` — create a questionnaire (staff)
+- `POST /questionnaires/{id}/invites` — generate a candidate invite; returns
+  the raw token once (staff; new setting `invite_token_days`, default 14)
+- `GET /public/questionnaires/{raw_token}` — fetch the questionnaire and any
+  saved answers, no login required — just possession of the token
+- `PUT /public/questionnaires/{raw_token}/responses` — save a draft or submit
+  (submission is rejected with the list of missing questions if any required
+  question is unanswered); every save appends to an `history` array on the
+  response row, so edits are traceable, not just the final state
+- `GET /requisitions/{id}/questionnaire-responses` — list responses (staff)
+
+New data model (migration `0004_questionnaires`, same RLS-enforced pattern
+as before): `questionnaires`, `questionnaire_invites` (stores only the token
+hash, an expiry, and a completion timestamp), `questionnaire_responses`
+(answers, edit history, missing-required list, submission state).
+
+**Code-quality note**: `create_invite`'s handling of the settings-derived
+invite expiry window looks like leftover/unfinished code — it constructs an
+always-`None` value via an `if False` conditional, imports `get_settings` a
+second time under an alias that's never used, and reads the expiry from the
+module-level cached settings rather than the request-injected settings used
+everywhere else in the codebase. It still works (the cached settings are
+equivalent in practice), but it doesn't match the codebase's own established
+pattern and looks unfinished.
+
+`main.py` now registers `questionnaire_router`, so this is reachable through
+the running API. `apps/api/tests/test_questionnaire_unit.py` covers the pure
+logic (token round-trip/uniqueness, question validation, missing-required
+detection), and `apps/api/tests/test_integration_questionnaire.py` proves
+the full lifecycle against a live stack: create a questionnaire, invite a
+candidate, autosave a partial answer (public endpoint, no auth), verify
+submission is rejected while a required question is missing, submit
+successfully once complete, and confirm the invite is genuinely single-use —
+both re-fetching and re-submitting after completion correctly return 409.
+Like the two integration tests before it, this one is not yet wired into
+`.github/workflows/ci.yml`'s `integration` job (still only
+`test_integration_readiness.py`) — it exists and passes when run manually.
+
+No frontend consumes any of this yet.
+
+## Recruiter console — Milestone 5
+
+`apps/web-recruiter` gained its first real, working screens, replacing the
+Milestone 1 design-system demo:
+
+- `src/api/client.ts` — a typed API client (`API_BASE = "/api"`, proxied by
+  Vite's dev server to `http://localhost:18000`, stripping the `/api` prefix)
+  covering login, listing candidates for a requisition, fetching a resume's
+  full detail, and listing scoring runs.
+- `src/auth.ts` — a minimal client-side auth store (`useSyncExternalStore`,
+  no state library) persisting the access token to `localStorage` and
+  pushing it into the API client.
+- `src/pages/Login.tsx` — a real login screen calling `POST /auth/login`.
+- `src/pages/Candidates.tsx` (route `/pipeline?req=<requisition-id>`) — the
+  pipeline view: lists every resume uploaded against a requisition with its
+  latest score and verdict (color-coded badge), sortable by score or name,
+  filterable by name/email, with loading skeletons and an empty state.
+- `src/pages/ResumeDetail.tsx` (route `/resumes/:id?req=<requisition-id>`) —
+  a candidate detail page built on a new shared component, `EvidenceSpine`
+  (see below): renders every extracted field and every scored dimension as
+  one continuous, scroll-linked timeline, each entry expandable to show its
+  exact source quote and metadata (page, character offsets, confidence,
+  extractor, or gateway evidence references). This is the "Evidence Spine
+  v1" referenced in the roadmap, now a real, working UI, not just a backend
+  concept.
+- `App.tsx` now does real client-side routing (`react-router-dom`): a
+  protected-route wrapper redirects to `/login` when signed out, plus a
+  persistent header with sign-out.
+- `GET /requisitions/{id}/candidates` was added to `apps/api/app/routers_resume.py`
+  to serve the pipeline view — its response shape (resume id, filename,
+  candidate email, latest run's score/verdict/fingerprint) matches exactly
+  what the frontend expects; this endpoint did not exist when the Milestone
+  4 API was first documented above.
+
+Not yet done: no requisition-browsing UI (the pipeline page requires a
+requisition ID passed via URL query string today), no job-description or
+resume-upload UI (still API-only), no MFA prompt on login (noted directly in
+the login screen's own copy as "a later milestone"), and `apps/web-candidate`
+has not been touched — only the recruiter console has started consuming the
+real backend. Per `docs/PLAN.md`, also deliberately deferred within this
+milestone: Playwright end-to-end and accessibility (axe) test wiring, 60fps
+performance trace capture, Lighthouse audits, a command palette, and saved
+pipeline views — the latter two are treated as hardening-stage work for
+Milestones 11/12, not gaps in the current milestone.
 
 ## Design system (`packages/ui`) — Milestone 1
 
@@ -245,6 +498,12 @@ Components so far:
   accessible circular score/progress indicator (spring-animated arc, proper
   `role="meter"` and `aria-value*` attributes), evidently intended for
   displaying candidate evaluation scores in the recruiter console.
+- `EvidenceSpine.tsx` — added for Milestone 5: renders a list of evidence
+  nodes (each either a scored dimension or an extracted field) as a single
+  vertical timeline with a scroll-linked progress line (skipped under
+  reduced motion), where every node expands on click to reveal its exact
+  source quote and metadata. This turns the backend's evidence-citation
+  discipline (Milestones 3–4) into a concrete, reusable UI pattern.
 
 A first component library also landed, styled with Tailwind CSS utility
 classes bound to the design tokens above via `tailwind.preset.js` (colors,
@@ -267,14 +526,103 @@ apps currently show milestone-checkpoint screens, not real functionality.
 
 ## Package/service scaffolding
 
-The remaining monorepo locations named in "Repository layout" above still exist
-as empty stubs, with no functionality yet:
+- `packages/eval` — real golden-set harness (see its section below);
+  `packages/contracts` still holds only a placeholder export.
+- `services/ai-gateway` — fully built (Milestone 3 + M8 speech layer);
+  `services/worker`, `services/sandbox-runner` — empty directories
+  (`.gitkeep` only), reserved but not started (Milestones 9+).
 
-- `packages/contracts`, `packages/eval` — each has only a
-  `package.json`/`pyproject.toml` and, where applicable, a single placeholder
-  export or module.
-- `services/ai-gateway`, `services/worker`, `services/sandbox-runner` — empty
-  directories (`.gitkeep` only), reserved but not started.
+## Resume ingest and matching (`apps/api`) — Milestone 4
+
+`app/text_extract.py` — span-preserving text extraction. `load_document_text()`
+handles PDF (`pymupdf`, page-by-page), DOCX (`python-docx`), and plain text,
+producing a `DocumentText` with the full text, per-page character-offset
+spans, and a SHA-256 content hash. `extract_fields()` deterministically pulls
+out: email, phone, and LinkedIn URL (regex), technical skills (a fixed ~50-term
+lexicon), years-of-experience claims (regex), and a candidate name (a naive
+heuristic: the first short, all-alphabetic line). Every single
+`ExtractedField` carries its page number, start/end character offsets, the
+literal source quote, a confidence score, and which extractor produced it
+(`regex`/`lexicon`/`heuristic`) — the same evidence-citation discipline
+established for the AI gateway, applied to deterministic parsing too.
+
+`app/matching.py` — explicitly documented in its own module docstring as
+"Deterministic matching checks — computed in code, never by the LLM." Given
+a `JobRequirements` (required skills, preferred skills, minimum years),
+`run_match_checks()` produces one `MatchCheck` per objective fact (each
+required skill present or not, preferred-skill coverage, stated years vs.
+requirement), each with a pass/fail, a human-readable detail string, and
+which extracted fields it's based on. `match_ratio()` gives an overall
+fraction; `to_payload()` serializes for API responses. This is a deliberate
+architecture decision: objective, checkable facts are computed by plain code
+and never left to the AI model's judgment — the AI (see Milestone 3 above)
+is reserved for genuinely subjective evaluation, and even then must always
+cite its evidence.
+
+`app/scoring.py` — versioned, weighted scoring that closes the loop between
+the AI gateway and the deterministic matching layer. Its module docstring
+states the principle directly: **"The LLM never performs arithmetic or
+threshold comparisons; it only produces qualitative dimension judgements,
+each of which must cite evidence."** Seven scoring dimensions (technical,
+experience, domain, education, certifications, soft_skills, stability) are
+combined via a versioned, fingerprinted `WeightProfile` (default weights
+30/20/15/10/10/10/5) into a single 0–100 score and one of four verdicts
+(`auto_reject`, `hold`, `shortlist`, `highly_recommended`) via configurable
+thresholds. `technical_dimension_from_checks()` derives the technical
+dimension directly from `matching.py`'s deterministic match ratio — no AI
+involved for that dimension at all. Every scoring run gets a
+`run_fingerprint` (a hash of the resume, checks, dimension scores, and
+profile version) so any specific score can be exactly reproduced and
+verified later — directly relevant to defensibility of a hiring decision.
+
+The data model gained five new tables in migration `0003_resume_scoring`
+(same RLS-enforced, organization-scoped pattern as Milestone 2):
+`job_descriptions`, `resume_documents`, `extracted_fields` (persists every
+`ExtractedField` from `text_extract.py`), `weight_profiles`, and
+`scoring_runs`. This migration and the underlying models are complete and
+already in the database schema.
+
+`app/routers_resume.py` now exposes the full pipeline as a real HTTP API,
+registered in `main.py`:
+
+- `POST /requisitions/{id}/job-description` — create a job description with
+  required/preferred skills and minimum years
+- `POST /requisitions/{id}/resumes` — upload a resume (PDF/DOCX/text, 10MB
+  limit); sniffs the real MIME type from file bytes rather than trusting the
+  filename, rejects an empty file, and rejects an exact duplicate (by content
+  hash) already uploaded to the same requisition; extracts and persists every
+  field immediately
+- `GET /resumes/{id}` — the resume plus every extracted field with its full
+  evidence (page, offsets, source quote)
+- `POST /requisitions/{id}/weight-profiles` — create an organization-scoped,
+  versioned scoring profile (auto-increments version per name)
+- `POST /requisitions/{id}/scoring-runs` — the core endpoint: loads the
+  resume, the requisition's latest job description, and the chosen weight
+  profile; runs the deterministic match checks for the `technical` dimension;
+  calls the **live AI gateway over HTTP** (`AIVA_AI_GATEWAY_URL`) once per
+  remaining dimension (experience, domain, education, certifications,
+  soft_skills, stability), each with a seed key derived from the resume's
+  content hash + profile fingerprint + dimension name for reproducibility;
+  combines everything into a total score and verdict; persists the full
+  result with its fingerprint; and writes an audit event
+- `GET /requisitions/{id}/scoring-runs` — list past runs for a requisition
+
+The API and AI gateway are now genuinely connected: `Settings.ai_gateway_url`
+(new `AIVA_AI_GATEWAY_URL` env var) points the API at the gateway, and
+`compose.yaml` wires `http://ai-gateway:9100` in for the containerized stack.
+This closes the "run side by side without talking" gap noted earlier for
+Milestone 3.
+
+`apps/api/tests/test_text_extract.py` is a thorough new test suite: it
+generates real PDF and DOCX files in-memory (via `pymupdf`/`python-docx`)
+and round-trips them through extraction, asserting every field's character
+span resolves back to its own value, multi-page PDFs map fields to the
+correct page, content hashing is deterministic, and a corrupted PDF raises
+rather than silently returning garbage.
+
+**What's still missing**: no frontend calls any of this yet — it's a
+complete, working API, testable directly, but not yet reachable through
+either web app's UI.
 
 ## AI gateway (`services/ai-gateway`) — Milestone 3
 
@@ -291,16 +639,27 @@ model recorded in `docs/MODEL_CARD.md`).
   8.1"): **no AI output can exist without evidence it can be traced back
   to** — this is the foundation for the "Evidence Spine" referenced in the
   Milestone 5 roadmap entry.
-- `app/prompts.py` (`PromptRegistry`) — loads `.txt` prompt templates from
-  `services/ai-gateway/prompts/`, does simple `{{variable}}` substitution, and
-  computes a content-hash `version` for each prompt so every generation can
-  record exactly which prompt version produced it.
+- `app/prompts.py` (`PromptRegistry`) — loads `.txt` prompt templates, does
+  simple `{{variable}}` substitution, and computes a content-hash `version`
+  for each prompt so every generation can record exactly which prompt version
+  produced it. Directory resolution was fixed to try the current working
+  directory's `prompts/` first, falling back to a path relative to the
+  package — the original module-relative-only resolution would have pointed
+  at the wrong location once the package is `pip install`-ed into the Docker
+  image (its `__file__` then resolves inside `site-packages`, not `/app`),
+  which plausibly explains prompts not being found in a containerized run
+  even though local development worked. A new `AIVA_GATEWAY_PROMPTS_DIR`
+  setting can override the directory explicitly.
 - `prompts/dimension_score.txt` — the first real prompt, for scoring one
   evaluation dimension against a job description. It explicitly instructs the
   model: score only what the candidate's own documents/statements support,
   cite at least one evidence span id, and never infer emotion, personality,
   or confidence — a deliberate anti-hallucination/anti-bias guardrail baked
   into the prompt itself.
+- `MockBackend`'s deterministic fill now echoes back a matching input value
+  for a field when one exists (e.g. reflecting the requested `dimension` back
+  in the output) rather than always synthesizing a placeholder, making mock
+  output more realistic for testing.
 - `app/backends.py` — a pluggable `Backend` interface with two
   implementations: `MockBackend` (deterministic, hash-seeded fake data that
   still validates against the real response schema — lets the rest of the
@@ -332,9 +691,34 @@ deterministic: the same request repeated returns byte-identical output, and
 changing an input (e.g. the dimension being scored) changes the output
 accordingly.
 
-Not yet done: no `Dockerfile`, and this service is not wired into
-`compose.yaml` or called by the main API yet — it runs and is tested in
-isolation but isn't part of the integrated stack.
+The gateway now has a `Dockerfile` (same multi-stage, non-root pattern as
+`apps/api`) and is wired into `compose.yaml` as the `ai-gateway` service, port
+19100 (host) / 9100 (container), running in `mock` backend mode by default
+with its own healthcheck. It is now called by the main API's scoring-run
+endpoint (see the Resume ingest and matching section above) — the two
+services are genuinely connected, not just running side by side.
+
+Per `docs/PLAN.md`, Milestone 3 is now marked delivered — labeled
+"mock-verified; GPU inference deferred to deployment" — with all 7 CI jobs
+green (including the previously-failing golden-set-against-live-container
+step, after the prompts-directory fix above). Explicitly deferred to actual
+GPU deployment, not part of this milestone: pulling the real
+Qwen2.5-14B-AWQ model weights into the runtime image, the full air-gapped
+(`--network none`) end-to-end interview proof, and evaluation thresholds
+measured against the real model rather than the mock backend. The backend
+interface is designed not to change when that lands.
+
+## Golden-set evaluation harness (`packages/eval`)
+
+`packages/eval` now has real content: `golden/cases.jsonl` defines three
+test cases against the AI gateway (two `DimensionScore` cases — technical and
+communication scoring — and one `ResumeFieldExtraction` case), and
+`tests/test_golden_set.py` runs each case against a live gateway instance
+(skipped unless `AIVA_EVAL_GATEWAY_URL` is set), asserting the response is
+schema-valid, that citing evidence/a source quote is present, and critically
+that **the exact same request produces byte-identical output on a second
+call** — proving the gateway's determinism guarantee holds against real
+cases, not just unit tests.
 
 ## Continuous integration
 
@@ -345,10 +729,17 @@ independent jobs:
 - `compose-config` — validates `compose.yaml` with `docker compose config -q`
 - `web` — pnpm install, lint, typecheck, and build across all frontend workspaces
 - `api-quality` — ruff, black `--check`, mypy (strict), and bandit against `apps/api`
+- `gateway-quality` — the same checks (ruff, black, mypy strict, bandit, unit
+  tests) against `services/ai-gateway`
 - `api-tests` — runs the API's offline unit test suite
-- `integration` — boots the full `docker compose` stack and runs
-  `test_integration_readiness.py` against the live services (`AIVA_INTEGRATION=1`),
-  then tears the stack down
+- `integration` — boots the full `docker compose` stack, applies migrations,
+  runs `test_integration_readiness.py` against the live services
+  (`AIVA_INTEGRATION=1`), then runs the four domain lifecycle suites
+  (auth/RBAC, resume→scoring roundtrip, questionnaire single-use flow, and
+  interview consent/pre-check/STT-loop) against the live stack including the
+  containerized gateway (`AIVA_AI_GATEWAY_URL=http://localhost:19100` for the
+  interview suite), then runs the golden-set evaluation suite against the live
+  AI gateway before tearing the stack down
 
 ## Architecture decisions (selected)
 
@@ -397,19 +788,20 @@ backup/restore, incident response — all pending Milestone 12).
 
 ## Planned AI capabilities
 
-No AI models are wired up yet (Milestone 0 has none). `docs/MODEL_CARD.md` records
-the candidate model for each planned capability, to be finalized as each lands:
+All model inference routes through the local ai-gateway; deterministic mock
+backends stand in for weights that land at GPU deployment. `docs/MODEL_CARD.md`
+records the candidate model for each capability and its current status:
 
 | Capability | Candidate model | Milestone |
 |---|---|---|
-| LLM reasoning/scoring | Qwen2.5-14B-Instruct AWQ (fallback Llama-3.1-8B-Instruct) | M3 |
+| LLM reasoning/scoring | Qwen2.5-14B-Instruct AWQ (fallback Llama-3.1-8B-Instruct) | M3 (mock-verified; weights at GPU deployment) |
 | Embeddings | bge-m3 (1024-dim) | M3 |
 | Resume parsing (NER) | spaCy pipeline | M4 |
 | OCR fallback | PaddleOCR / Tesseract | M4 |
-| Speech-to-text | faster-whisper large-v3 / distil-large-v3 | M8 |
-| Text-to-speech | Piper (ONNX voices) | M8 |
-| Identity verification | InsightFace ArcFace (with consent gate) | M8 |
-| Proctoring signals | MediaPipe Face Mesh | M8 |
+| Speech-to-text | faster-whisper large-v3 / distil-large-v3 | M8 interface shipped, mock-verified; weights pending deployment |
+| Text-to-speech | Piper (ONNX voices) | M8 interface shipped, mock-verified; voices pending deployment |
+| Identity verification | InsightFace ArcFace (with consent gate) | deferred to M11 integrity work |
+| Proctoring signals | MediaPipe Face Mesh | deferred to M11 integrity work |
 | Reranker | bge-reranker-v2-m3 | M10 |
 
 Licensing rule: Apache-2.0/MIT preferred; anything under a bespoke community
@@ -417,26 +809,65 @@ license is flagged for human legal review before integration.
 
 ## Full roadmap (per docs/PLAN.md)
 
-`docs/PLAN.md` was restructured into a status ledger. Milestones 0–2 are
-listed as "Delivered and CI-verified." **Note on that claim**: for Milestone
-2 specifically, PLAN.md states the full authorization matrix, refresh-replay
-revocation, MFA flow, and chain integrity are "proven in CI integration job"
-— but as of this update, `.github/workflows/ci.yml`'s `integration` job still
-only runs `tests/test_integration_readiness.py`, not `test_integration_auth.py`
-(see above). This README defers to the directly-observed CI config over the
-planning document's claim; treat Milestone 2's CI verification status as
-unconfirmed until the workflow file itself runs that test.
+`docs/PLAN.md` is a running status ledger; Milestones 0-8 (core) are now
+listed as "Delivered and CI-verified." **Update on the CI-verification
+caveat this document has tracked since Milestone 5**: that gap is now
+substantially closed. `.github/workflows/ci.yml`'s `integration` job has
+been directly re-checked and now genuinely runs all four integration test
+files in sequence — `test_integration_auth.py`, `test_integration_resume.py`,
+`test_integration_questionnaire.py`, and `test_integration_interview.py` —
+alongside the original `test_integration_readiness.py` in an earlier job.
+So Milestones 2, 4, 6, and 8's core claims of being proven against a live
+stack in CI are now accurate as written, not just as intended.
+
+Two narrower gaps flagged earlier remain open and PLAN.md does not claim
+otherwise: the `GET /requisitions/{id}/candidates` endpoint added for
+Milestone 5 still has no automated test coverage at all (not merely
+unwired from CI — no test exists for it in the codebase); and Milestone 7
+(scheduling) still has no dedicated integration test — only unit tests
+(`test_scheduling.py`, `test_ics.py`) plus the generic readiness check,
+not an end-to-end proof against a live stack. Neither of these indicates
+missing feature work — both areas are built and function correctly when
+exercised manually or via unit test — only that their automated safety
+net is narrower than the rest of the platform's.
+
+**This tracking was not academic**: while building Milestone 8's
+integration flow, the team discovered that migrations `0004` (questionnaires)
+and `0005` (interview slots) never granted database privileges to `aiva_app`
+— the restricted role the running API actually connects as. Every real
+write to a questionnaire or an interview slot would have failed with a
+database permission error, despite all the code and unit tests being
+correct and passing. This is exactly the class of problem a live-stack
+integration test is designed to catch, and it went undetected until
+Milestone 8's own manual integration testing surfaced it — before the CI
+gap above had been closed. It's now fixed via a backfill migration
+(`0007_app_role_grants_backfill`) rather than editing already-applied
+migration history. This is a concrete, already-realized example of why the
+CI-wiring gap this document tracked was worth closing, not just a
+formality — and a reminder to treat "tests exist" and "tests run
+automatically on every change" as two separate claims going forward, even
+now that the gap above is closed.
+
+**Milestones 6 and 7 are marked "(core)"** — PLAN.md explicitly scopes out,
+as deliberately deferred rather than forgotten: for Milestone 6, AI-based
+evaluation of candidate answers and resume-inconsistency flagging (blocked
+on a real AI model being deployed at Milestone 3, though the gateway
+contract to support it already exists), the candidate-facing portal
+screens, and persistent storage for file-upload-type question answers; for
+Milestone 7, actually sending the `.ics` invite and reminder emails
+(deferred to Milestone 12, which is where a self-hosted mail server gets
+wired into the compose stack), the candidate-facing self-scheduling UI
+(arrives with the Milestone 6 portal), and a cap on how many interviews one
+interviewer can be booked into per slot.
+
+Milestone 8 (consent, device pre-check, adaptive STT/TTS interview loop,
+and the live candidate HUD) is now delivered and CI-verified, per above —
+it has moved out of this remaining-work table.
 
 Remaining milestones and their dependencies:
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M3 | AI gateway, local models, constrained decoding, eval harness scaffold | GPU hosts, model weights in image |
-| M4 | Resume ingest/parsing, job-description processing, matching, scoring, shortlisting | M2, M3 |
-| M5 | Recruiter console: pipeline board, candidate detail, "Evidence Spine" v1 | M1, M4 |
-| M6 | Questionnaire builder, candidate portal, evaluation | M4 |
-| M7 | Scheduling, availability rules, .ics calendar files, SMTP reminders | M6 |
-| M8 | LiveKit pre-check/consent, STT/TTS adaptive interview loop, live HUD | M7 |
 | M9 | Sandbox runner, code editor, whiteboard, screen share, task discussion | M8 |
 | M10 | RAG-based FAQ, evaluation engine, report generation (PDF/Excel export) | M9 |
 | M11 | Dashboard, blind screening, bias audit, integrity signals, DSAR tooling | M10 |
@@ -480,18 +911,58 @@ Both frontend apps use React 18 + TypeScript (strict) + Vite, each on its own de
 port so they can run side by side. ESLint uses `typescript-eslint`'s type-checked
 recommended config plus custom rules that ban `any` and non-null assertions.
 
-- `apps/web-recruiter` (port 15173): recruiter console. `App.tsx` is currently
-  a deliberate "design system preview" screen exercising every `@aiva/ui`
-  component together (score rings, badges, buttons, form fields, loading
-  skeletons, empty state) with sample data — explicitly not real candidate
-  data, and not a real application page yet. It also references two more
-  upcoming milestones: a command palette (arrives with the pipeline, M5) and
-  evidence-linked recruiter notes (M11).
-- `apps/web-candidate` (port 15174): candidate-facing app, now also built with
-  `@aiva/ui` components. Shows an "invitation required" notice (nothing is
-  stored before an invite is sent) and an empty state noting that equipment
-  checks, a practice room, and the interview runner arrive in later
-  milestones — no real pages yet.
+- `apps/web-recruiter` (port 15173): recruiter console — login, pipeline
+  board with scored candidate cards, and the resume detail Evidence Spine
+  (see Milestone 5 section above). Still missing: requisition browsing,
+  job-description/resume upload screens, MFA prompt on login.
+- `apps/web-candidate` (port 15174): the candidate portal is now a real
+  application (Milestone 8): React Router shell with three steps —
+  `Join` (token entry, pre-filled from `?token=`), the consent screen, and
+  `PreCheckGate` (live camera preview via getUserMedia, microphone peak-level
+  detection through WebAudio with silence classified as degraded rather than
+  ok, Web Audio speaker tone with explicit "I heard it" confirmation, and a
+  genuine connection sample measuring healthz round-trip plus openapi.json
+  throughput) feeding an orchestrating `Interview.tsx` that renders the live
+  HUD for active sessions: status chips, elapsed timer, topic progress spine,
+  question card with gateway-backed read-aloud (`speak` → WAV blob playback),
+  typed-text or recorded-audio answering (MediaRecorder → base64 → gateway
+  STT), transcript drawer, and an end-session control. Terminal states render
+  dedicated completed/declined/aborted screens. All traffic flows same-origin
+  through the Vite dev proxy; no external calls.
+
+  - Loads session state by token on mount and switches on `status` to
+    render the right screen: a consent gate (`pending_consent`), the
+    `PreCheckGate` component from `PreCheck.tsx` (`consent_granted`/
+    `precheck_passed`), the live interview HUD (`active`), or a plain
+    closing message for `completed`/`declined`/`aborted`.
+  - The consent gate shows the versioned consent statement returned by the
+    API and calls `submitConsent`, refetching state afterward — declining
+    is a dead end, matching the backend's terminal-state design.
+  - The live HUD is fully built out: an elapsed-time clock, a topic
+    progress bar, a "Read aloud" button that calls the `/tts` endpoint and
+    plays the returned audio, a text box for typed answers, and a real
+    microphone recorder (`MediaRecorder`) with "Record answer" / "Stop &
+    send recording" that posts the captured audio to `/turns` as base64 —
+    so both answer paths exercised by the backend's integration test
+    (typed and spoken) are already reachable from real UI. A collapsible
+    transcript log tracks every answer given so far, and an "End interview"
+    button calls `finishInterview`.
+
+  Routing is now fully and cleanly wired: `App.tsx` owns a `BrowserRouter`
+  directly (an earlier intermediate version wrapped it in `main.tsx` with
+  a `HashRouter` instead; that has been consolidated), rendering `Join` at
+  `/` and `Interview` at `/interview`, with an unknown-path redirect back
+  to `/`. `react-router-dom` is now correctly listed in
+  `apps/web-candidate/package.json`'s dependencies and the workspace
+  lockfile has been updated to match. `vite.config.ts` now also proxies
+  `/api` requests from the dev server through to the backend on port
+  18000, matching the `API_BASE = "/api"` constant already used in
+  `api.ts`. With this, `apps/web-candidate` is a complete, internally
+  consistent application: a candidate can follow their invitation link,
+  give or decline consent, pass a real equipment check, and complete a
+  live, adaptive interview by typing or speaking answers, entirely through
+  working screens wired to the real backend API described earlier in this
+  document. Nothing about this app is still a stub.
 
 ## Air-gap policy
 

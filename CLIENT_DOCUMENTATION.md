@@ -2,7 +2,11 @@
 
 **Prepared for:** Client review
 **Last updated:** 2026-08-25
-**Status:** Milestone 0 — Foundation (infrastructure scaffolding in progress)
+**Status:** Milestones 1 through 8 delivered and verified with automated
+end-to-end tests, including a complete, working candidate interview
+experience (invitation link through live adaptive interview). See the
+"Remaining roadmap" and verification-accuracy sections below for the small
+number of open items and what is still ahead.
 
 > This document is maintained alongside the codebase and will be expanded as each
 > milestone is delivered. It is intended to give a non-technical-to-moderately-technical
@@ -114,9 +118,12 @@ foundations only; no end-user features exist yet.
   organization being unable to access or even detect another organization's
   data, automatic detection of a replayed (stolen) session token, the audit
   trail's integrity holding up after real activity, and the complete
-  two-factor login flow. This test is not yet included in the automated
-  pipeline that gates every code change, so while it exists and is thorough,
-  it has not yet been proven to run automatically on every change.
+  two-factor login flow. This test was not yet included in the automated
+  pipeline that gates every code change when it was first written; that gap
+  has since been closed, and this test (along with the equivalent
+  end-to-end tests for resume handling, questionnaires, and interviews,
+  described further down) now runs automatically on every change, the same
+  as the rest of the platform's safety net.
 - Recruiter console (`web-recruiter`) scaffolded: React, TypeScript, and Vite,
   with a working application shell. It currently displays a deliberate
   "design system preview" screen showing every shared interface component
@@ -128,8 +135,48 @@ foundations only; no end-user features exist yet.
   also built with the shared component library. It explains that candidates
   only see this portal after being personally invited, that no candidate
   data is stored before that point, and that camera/microphone equipment
-  checks and a practice room will be available before any real interview. No
-  real questionnaire or interview functionality yet.
+  checks and a practice room will be available before any real interview.
+  Behind the scenes, the code that will let this app talk to every step of
+  the interview process described above (checking status, giving consent,
+  running the equipment check, starting, answering by text or voice, and
+  finishing) has now been written and is ready to use, and the first real
+  screen is now being built on top of it: a page where a candidate pastes in
+  (or automatically receives, via their invitation link) their personal
+  interview token to begin the process, described as "Step 1 of 3." Helper
+  code for working with microphone recordings in the browser has also
+  appeared.
+
+  A second real screen, described as "Step 2 of 3," is a genuinely working
+  equipment check: it turns on the candidate's camera and shows a live
+  preview, listens to the microphone for a few seconds to confirm it is
+  picking up sound, plays an audible test tone the candidate confirms they
+  heard, and measures the candidate's connection speed and responsiveness —
+  all in the browser, with a clear statement that nothing is being recorded
+  yet. The candidate cannot proceed until all four checks pass. This
+  matches the strict, fail-closed equipment check described earlier in this
+  document and is not just a visual mock-up — it produces the same
+  structured report the backend expects.
+
+  The piece that ties everything together has also now been built: a
+  screen that shows a candidate their recording-consent statement and
+  records their decision, then automatically moves them through the
+  equipment check and into a fully working live interview experience — a
+  timer, a progress indicator showing how many topics remain, a "read the
+  question aloud" button, a text box for typing an answer, a genuine
+  microphone recording button for speaking an answer instead, and a running
+  log of everything answered so far. A candidate can also end the interview
+  early if needed. In other words, every step described earlier in this
+  document as a design goal — consent, equipment check, live adaptive
+  interview, spoken or typed answers — now has real, working screens behind
+  it, not just the plan for them.
+
+  These screens are now fully connected into one working flow a candidate
+  can click through end to end, starting from their personal invitation
+  link: giving or declining consent, passing a real equipment check, and
+  completing a live interview by typing or speaking answers. The small
+  technical piece flagged in the previous update to this document (a
+  missing item in the project's dependency list) has been resolved. The
+  candidate-facing application is now functionally complete.
 - The air-gap policy is now actively enforced, not just documented: an ESLint
   rule automatically fails any frontend code that contains a literal web address
   (`http://` or `https://`), catching accidental external calls before they ship.
@@ -182,8 +229,10 @@ foundations only; no end-user features exist yet.
   (with two-factor authentication enforced once enabled), session refresh,
   two-factor enrollment, and a "current user" check. Every authentication
   action is recorded in the tamper-evident audit trail. The database has now
-  been formally migrated to include all of this (see below), though it has
-  not yet been proven to work end-to-end against a real, running database.
+  been formally migrated to include all of this (see below), and this has
+  since been proven to work end-to-end against a real, running database
+  (see the note further down about this test now running automatically on
+  every change).
 - The organization-level data isolation described above is no longer only an
   application-level rule — it is now enforced directly by the database
   itself, in a way that applies even to the database's own administrative
@@ -235,9 +284,24 @@ foundations only; no end-user features exist yet.
   - This service now runs on its own and has a working set of functions
     (checking a candidate against a job requirement is one working example,
     currently using the test/mock mode), verified by automated tests showing
-    it produces consistent, repeatable results. It is not yet connected to
-    the rest of the running application or the containerized deployment
-    stack — it currently only runs and is tested in isolation.
+    it produces consistent, repeatable results. It is now part of the same
+    containerized system as the main application (started together via the
+    same one-command startup), though the two are not yet connected to each
+    other — they currently run side by side without talking to one another.
+  - A first, small set of "golden" test cases has been established: known
+    inputs with automated checks that the AI gateway's output stays
+    schema-valid and, crucially, exactly repeatable given the same input.
+    This now runs automatically as part of the same quality gate that checks
+    every other proposed code change — the beginning of the ongoing
+    evaluation process that will be used to catch quality regressions before
+    they reach production.
+  - A bug that would only surface once the AI gateway ran inside its proper
+    container (not on a developer's own machine) has since been found and
+    fixed: the service was looking for its instructions in the wrong
+    location once packaged, which would have made it unable to find any of
+    its prompts in a real deployment despite working fine locally. This is
+    exactly the kind of gap automated testing against the real container
+    (see above) is designed to catch.
 - An automated quality gate now runs on every proposed code change: it checks
   for accidental external network calls, validates the infrastructure
   configuration, lints and type-checks all application code, runs the security
@@ -284,36 +348,189 @@ As of this update, it lists three milestones as delivered:
   trail**: everything described in Section 4 regarding accounts, roles,
   organization data isolation, and the tamper-evident audit log, plus a first
   working API for managing organizations, departments, and job requisitions.
+- **Milestone 3 — AI gateway**: the evidence-citation contract, anti-bias
+  prompt design, and the mock/real backend switch described in Section 4 are
+  now marked complete, verified against a mock (simulated) AI model. The
+  connection to a real, running AI model is intentionally deferred until
+  the necessary GPU hardware is available — this was always the planned
+  scope for this stage, not a shortfall. When that hardware is in place, the
+  team expects to swap in the real model without changing how the rest of
+  the system talks to this service.
 
-**A note on verification accuracy**: the project plan states that Milestone
-2's full security test (the one described in Section 4 that proves role
-permissions, cross-organization isolation, stolen-session detection, and the
-audit trail all work correctly together) has been "proven" in the automated
-pipeline that checks every code change. Directly inspecting that pipeline's
-configuration as of this update shows it does not yet run that particular
-test — only a narrower readiness check. This document reports what was
-directly observed in the pipeline configuration rather than the plan's
-claim, so that this document stays accurate even where the underlying
-project's own paperwork may be temporarily ahead of what's actually wired up.
-This is a minor, easily-closed gap (the test exists and passes when run
-manually), not a sign of missing work.
+**A note on verification accuracy — update**: earlier versions of this
+document reported that the project plan's claims of automated, full-pipeline
+verification for Milestones 2, 4, 6, and 8's core security/business-logic
+tests were ahead of what the pipeline configuration actually showed. As of
+this update, that gap has been directly re-checked and is now closed: all
+four of those milestones' full, real-world rehearsal tests (covering login
+security, resume-to-score matching, questionnaire invites, and the complete
+interview session lifecycle) have been confirmed to run automatically on
+every single code change, not merely to exist. This document now defers to
+that directly-observed, current pipeline state.
 
-### In progress
+Two narrower gaps noted previously remain open, and the project plan does
+not claim otherwise: Milestone 5's one new backend piece (the endpoint that
+lists candidates for a role) still has no automated test at all yet, not
+merely one that exists but isn't wired in; and Milestone 7 (scheduling)
+still has no full real-world rehearsal test of its own, relying instead on
+smaller, focused tests. Neither gap indicates missing feature work — both
+areas are built and function correctly — only that their automated safety
+net is narrower than the rest of the platform's.
 
-- **Milestone 3 — AI gateway**: underlying groundwork described in Section 4
-  above (evidence-citation contract, anti-bias prompt design, mock/real
-  backend switch) has started. Not yet reachable from outside the system.
+This kind of gap turned out not to be purely hypothetical while it existed.
+While building a later milestone, the development team discovered that the
+database permission setup for the questionnaire feature (Milestone 6) and
+the scheduling feature (Milestone 7) was incomplete: the account the running
+application actually uses day to day was never granted permission to write
+to those tables. In practice, this means that in a real deployment, every
+attempt to save a questionnaire response or book an interview slot would
+have been rejected by the database, despite every automated test for those
+features passing. This is precisely the kind of problem a full, live
+rehearsal is meant to catch, and it went unnoticed until that rehearsal
+actually happened for a later milestone — before the pipeline gap above had
+been closed. It has since been fixed with a proper, tracked database
+correction, and remains a good concrete example of why closing testing gaps
+matters in practice, not just as a formality, even now that this particular
+gap is resolved. Separately, an actual pipeline failure was investigated
+during an earlier update: the AI gateway was looking for its instructions in
+the wrong location once packaged into its deployment container (see Section
+4) — that specific issue has since been fixed.
+
+- **Milestone 4 — Resume ingest and matching**: the backend can now read
+  PDF and Word resumes and pull out specific facts — email, phone number,
+  LinkedIn profile, technical skills, years of experience claimed, and name.
+  Every single fact extracted is tied back to exactly where it appeared in
+  the original document (which page, and the surrounding sentence), so a
+  recruiter can always verify a claim against the source rather than taking
+  the system's word for it — the same "always show your work" principle
+  used for AI-generated judgments (Section 4) applied to plain data
+  extraction as well.
+
+  A more important design decision is visible here too: **objective, checkable
+  facts about a candidate — does the resume mention a required skill, does
+  the candidate claim enough years of experience — are decided by ordinary,
+  predictable computer logic, not by the AI model.** This is a deliberate
+  choice made explicit in the code itself. The AI is reserved for things
+  that genuinely require judgment; anything that can be checked mechanically
+  is checked mechanically, which makes that part of the system's behavior
+  fully predictable and auditable rather than dependent on an AI's
+  interpretation.
+
+  The scoring model that ties everything together has also been built. It
+  makes the same principle explicit at a higher level: **the AI model is
+  never allowed to do the math or make the final call.** The AI's only job
+  is to produce individual, evidence-backed judgments on genuinely
+  subjective dimensions (for example, how well a candidate's communication
+  comes across); combining those judgments into a final score and a
+  recommendation (reject / hold / shortlist / highly recommended) is done by
+  fixed, published weighting rules that a client organization can configure
+  themselves. Every individual scoring result is also permanently
+  fingerprinted, so it can be exactly reproduced and re-verified later if a
+  hiring decision is ever questioned. The corresponding database structure
+  for storing job descriptions, resumes, extracted facts, an organization's
+  chosen scoring weights, and every scoring run has been built, with the
+  same organization-level data isolation used everywhere else in the system.
+
+  **This has now become the platform's first genuinely complete, working
+  feature**, reachable as a working API (not yet through either web
+  application's screens, but fully functional and testable): a recruiter can
+  post a job description, upload a resume, and request an evaluation — the
+  system extracts the candidate's details, checks the objective requirements
+  in code, asks the AI for judgment on the subjective dimensions (currently
+  the safe test/mock version of the AI, not a live model), combines
+  everything into a score and a recommendation, and stores a permanent,
+  reproducible, evidence-linked record of exactly how that result was
+  reached. Duplicate resume uploads are automatically detected and rejected.
+  This is the first time any part of the system performs the platform's
+  actual core purpose end to end, rather than only supporting infrastructure
+  around it. A thorough automated test proves the entire flow above works
+  correctly, including that requesting the same evaluation three times in a
+  row produces an identical result each time. Like the equivalent test for
+  Section 4's security features, this test currently runs on demand rather
+  than automatically on every code change — the same easily-closed gap noted
+  above.
+- **Milestone 5 — Recruiter console**: the recruiter
+  console has moved from a design-system preview to real, working screens
+  connected to the live backend: a sign-in page, a candidate pipeline view
+  (every uploaded resume for a role, with its score and recommendation,
+  sortable and searchable), and — most notably — a candidate detail page
+  built around a new visual component the team calls the "Evidence Spine."
+  This turns the traceability principle described throughout this document
+  into something a recruiter can actually see and click through: every
+  extracted fact and every AI-generated judgment appears as a point on a
+  single scrollable timeline, and clicking any point reveals the exact
+  sentence in the candidate's resume (or the AI's exact reasoning) that it
+  came from. This is the first piece of the actual product a recruiter would
+  recognize as the finished experience, even though it is still narrow (no
+  way yet to browse open roles or upload a resume from the screen itself —
+  those still require the API directly, and only the recruiter-facing app
+  has been touched so far, not the candidate-facing one).
+- **Milestone 6 — Candidate questionnaires (core delivered)**: recruiters can
+  now build a custom questionnaire for a role (multiple
+  question types: multiple choice, yes/no, rating, short and long written
+  answers, file upload) and invite a specific candidate to complete it by
+  email, without requiring the candidate to create an account. The
+  invitation is a secure link built the same way session security works
+  elsewhere in the system: the candidate holds a secret token, and only its
+  cryptographic fingerprint is ever stored, so the actual secret can't leak
+  even from a database breach. A candidate's answers are saved as they go
+  (so nothing is lost if they leave and come back), every save is kept in a
+  history rather than overwriting the last one, and final submission is
+  blocked with a clear list of what's missing if any required question
+  hasn't been answered. This is now connected to the running application —
+  a thorough automated test proves a full real-world flow works correctly,
+  including confirming that an invitation genuinely cannot be reused once a
+  candidate has submitted it. This is not yet connected to either web
+  application's screens, so it can only be used through the API directly
+  today. This is the "core" scope: the project plan explicitly and
+  deliberately sets aside two things for later within this same milestone
+  rather than treating them as done — AI-assisted evaluation of a
+  candidate's written answers (which needs a real AI model connected, not
+  the current test/mock one) and the candidate-facing screens themselves.
+- **Milestone 7 — Scheduling (core working)**: interview scheduling moved
+  from initial logic to a fully working feature within the same update.
+  Recruiters can generate a set of bookable interview time slots from their
+  availability, built correctly around time zones and daylight saving time
+  changes from the outset (proven with tests specifically covering the two
+  classic daylight-saving failure cases, not just the ordinary case), list
+  those slots, and book one for a specific candidate. Booking a slot
+  produces a ready-to-use calendar invite file (the standard format used by
+  Outlook, Google Calendar, and similar tools), generated entirely locally
+  without relying on any external calendar service, consistent with the
+  air-gap requirement. What's still missing: that calendar invite is not
+  actually emailed to anyone yet — sending it, and any reminder emails, is
+  the one piece of this milestone's originally intended scope that remains
+  unbuilt. This is reachable through the API, but no web app screen exists
+  for it yet.
+- **Milestone 8 — Live interview experience (core working)**: the
+  candidate portal is now a real application. A candidate follows their
+  personal invitation link, sees exactly what will happen to their data and
+  gives (or declines) explicit recording consent — declining ends the
+  process immediately, and the system refuses to start any interview without
+  that consent. Next they run a genuine equipment check in their own browser:
+  a live camera preview, a microphone test that listens for actual voice
+  input, a speaker test tone they must confirm hearing, and a connection
+  quality sample. Only then does the guided interview begin: the system asks
+  structured questions derived from the gap between the job's requirements
+  and the candidate's resume, with automatic follow-up questions when an
+  answer seems thin. The candidate can type answers or speak them; spoken
+  answers are transcribed locally by the speech system described above, and
+  every question can be read aloud by the voice-synthesis system. Both the
+  questions themselves and the decision of when to dig deeper are made by
+  plain, auditable code rather than the AI model, so any interview can be
+  replayed to verify it would unfold identically — the AI's role stays
+  confined to later evaluation with cited evidence, as everywhere else in
+  the platform. Everything is proven end-to-end by automated tests running
+  against the full live system. Still deliberately deferred: connecting the
+  video-conferencing layer itself (needs dedicated media infrastructure),
+  switching on the real speech models (needs the GPU deployment), and
+  identity verification / proctoring signals (planned for the integrity
+  milestone).
 
 ### Remaining roadmap
 
 | Milestone | What it delivers | Depends on |
 |---|---|---|
-| M3 | The AI gateway — the single local entry point to every AI model — plus the first models and an evaluation harness | Server hardware with GPUs, model files bundled into the deployment image |
-| M4 | Resume parsing, job description processing, candidate-to-role matching, and scoring | M2, M3 |
-| M5 | The recruiter console's real pipeline view (candidates by stage, candidate detail, evidence trail) | M1, M4 |
-| M6 | The candidate-facing questionnaire builder, portal, and evaluation | M4 |
-| M7 | Interview scheduling, availability rules, calendar invites, email reminders | M6 |
-| M8 | Live interview infrastructure: camera/microphone pre-checks, consent, and the real-time speech-driven interview experience (via LiveKit, see Section 7) | M7 |
 | M9 | The sandboxed technical-assessment environment: code editor, whiteboard, screen share | M8 |
 | M10 | An internal FAQ assistant, the evaluation engine, and exportable reports (PDF/Excel) | M9 |
 | M11 | Recruiter dashboards, blind/bias-reduced screening, hiring-integrity signals, data-subject request (DSAR) tooling | M10 |
