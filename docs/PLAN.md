@@ -43,11 +43,27 @@ Deferred to GPU deployment: pulling Qwen2.5-14B-AWQ weights into the runtime ima
 the §13 `--network none` end-to-end interview proof, and real-model eval thresholds.
 The backend interface does not change when those land.
 
+### Milestone 4 — Resume ingest, matching, weighted scoring
+
+Span-preserving extraction (PDF via pymupdf, DOCX via python-docx, TXT) where every
+field resolves to page number + char offsets + literal source quote — verified by a
+test that re-slices every span and compares against its value. Deterministic
+regex/lexicon extraction for email/phone/LinkedIn/skills/years/name; multi-page
+page-mapping test. Matching checks are computed in code only (skill presence,
+preferred coverage, stated-vs-required years). Versioned WeightProfile objects with
+normalized shares and threshold bands → auto_reject/hold/shortlist/highly_recommended;
+scoring runs persist dimension payloads with per-dimension evidence refs (deterministic
+checks vs. gateway judgements carrying prompt-version+model citations) plus a
+run_fingerprint — CI proves byte-identical fingerprints across repeated runs
+(determinism gate). Duplicate-resume rejection by content hash, 10MB cap, magic-byte
+sniffing. Integration job exercises upload → JD → profile → score roundtrip against
+the live stack including containerized gateway.
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M4 | Resume ingest/spans, JD processing, matching, scoring, shortlisting | M2, M3 |
+| M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M6 | Questionnaire builder + candidate portal + evaluation | M4 |
 | M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
