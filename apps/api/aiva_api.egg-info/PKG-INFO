@@ -4,6 +4,7 @@ Version: 0.1.0
 Summary: AIVA air-gapped recruitment platform API
 Requires-Python: <3.12,>=3.11
 Requires-Dist: fastapi<0.116,>=0.115
+Requires-Dist: email-validator<3,>=2.2
 Requires-Dist: uvicorn[standard]<0.33,>=0.32
 Requires-Dist: pydantic-settings<3,>=2.6
 Requires-Dist: structlog<25,>=24.4
@@ -14,6 +15,8 @@ Requires-Dist: minio<8,>=7.2
 Requires-Dist: urllib3<3,>=2.2
 Requires-Dist: alembic<2,>=1.14
 Requires-Dist: argon2-cffi<24,>=23.1
+Requires-Dist: pymupdf<2,>=1.24
+Requires-Dist: python-docx<2,>=1.1
 Requires-Dist: pyjwt<3,>=2.9
 Requires-Dist: pyotp<3,>=2.9
 Provides-Extra: dev

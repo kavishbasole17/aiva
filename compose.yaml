@@ -79,6 +79,7 @@ services:
       AIVA_DATABASE_URL: postgresql+asyncpg://aiva_app:aiva_app_dev_only@postgres:5432/aiva
       AIVA_ADMIN_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@postgres:5432/aiva
       AIVA_JWT_SECRET: dev-only-jwt-secret-0123456789abcdef
+      AIVA_AI_GATEWAY_URL: http://ai-gateway:9100
       AIVA_REDIS_URL: redis://redis:6379/0
       AIVA_MINIO_ENDPOINT: minio:9000
       AIVA_MINIO_ACCESS_KEY: aiva_dev

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(min_length=3, max_length=63)
     minio_secure: bool = False
     jwt_secret: str = Field(min_length=24)
+    ai_gateway_url: str = ""
     access_token_minutes: int = 15
     refresh_token_days: int = 14
     log_level: str = "INFO"

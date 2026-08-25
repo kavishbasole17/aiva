@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -102,6 +102,103 @@ class RefreshToken(Base):
 
     def is_reused(self) -> bool:
         return self.rotated_at is not None
+
+
+class JobDescription(Base):
+    __tablename__ = "job_descriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    requisition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("requisitions.id"), index=True
+    )
+    title: Mapped[str] = mapped_column(Text)
+    raw_text: Mapped[str] = mapped_column(Text)
+    required_skills: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    preferred_skills: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    min_years_experience: Mapped[int] = mapped_column(BigInteger, default=0)
+    version: Mapped[int] = mapped_column(BigInteger, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResumeDocument(Base):
+    __tablename__ = "resume_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    requisition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("requisitions.id"), index=True
+    )
+    filename: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    mime_type: Mapped[str] = mapped_column(String(64))
+    page_count: Mapped[int] = mapped_column(BigInteger, default=1)
+    full_text: Mapped[str] = mapped_column(Text)
+    candidate_email: Mapped[str | None] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExtractedFieldRow(Base):
+    __tablename__ = "extracted_fields"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    resume_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resume_documents.id"), index=True
+    )
+    field_name: Mapped[str] = mapped_column(String(64))
+    value: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float)
+    page_number: Mapped[int] = mapped_column(BigInteger)
+    start_offset: Mapped[int] = mapped_column(BigInteger)
+    end_offset: Mapped[int] = mapped_column(BigInteger)
+    source_quote: Mapped[str] = mapped_column(Text)
+    extractor: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WeightProfileRow(Base):
+    __tablename__ = "weight_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(BigInteger, default=1)
+    weights: Mapped[dict[str, int]] = mapped_column(JSONB)
+    auto_reject_below: Mapped[int] = mapped_column(BigInteger, default=30)
+    hold_below: Mapped[int] = mapped_column(BigInteger, default=50)
+    highly_recommended_at: Mapped[int] = mapped_column(BigInteger, default=85)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScoringRunRow(Base):
+    __tablename__ = "scoring_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    requisition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("requisitions.id"), index=True
+    )
+    resume_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resume_documents.id"), index=True
+    )
+    weight_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("weight_profiles.id")
+    )
+    total_score: Mapped[int] = mapped_column(BigInteger)
+    verdict: Mapped[str] = mapped_column(String(32))
+    checks_payload: Mapped[list[dict[str, object]]] = mapped_column(JSONB)
+    dimensions_payload: Mapped[list[dict[str, object]]] = mapped_column(JSONB)
+    run_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditEvent(Base):

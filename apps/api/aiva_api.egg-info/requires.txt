@@ -1,4 +1,5 @@
 fastapi<0.116,>=0.115
+email-validator<3,>=2.2
 uvicorn[standard]<0.33,>=0.32
 pydantic-settings<3,>=2.6
 structlog<25,>=24.4
@@ -9,6 +10,8 @@ minio<8,>=7.2
 urllib3<3,>=2.2
 alembic<2,>=1.14
 argon2-cffi<24,>=23.1
+pymupdf<2,>=1.24
+python-docx<2,>=1.1
 pyjwt<3,>=2.9
 pyotp<3,>=2.9
 
