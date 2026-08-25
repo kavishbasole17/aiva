@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: aiva-eval
+Version: 0.1.0
+Summary: AIVA golden-set evaluation harness
+Requires-Python: <3.12,>=3.11
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: pytest-asyncio<0.25,>=0.24; extra == "dev"
+Requires-Dist: httpx<0.28,>=0.27; extra == "dev"

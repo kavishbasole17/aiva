@@ -1,0 +1,8 @@
+pyproject.toml
+src/aiva_eval/__init__.py
+src/aiva_eval.egg-info/PKG-INFO
+src/aiva_eval.egg-info/SOURCES.txt
+src/aiva_eval.egg-info/dependency_links.txt
+src/aiva_eval.egg-info/requires.txt
+src/aiva_eval.egg-info/top_level.txt
+tests/test_golden_set.py

@@ -20,8 +20,7 @@ CASES = [json.loads(line) for line in CASES_PATH.read_text().splitlines() if lin
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
     assert GATEWAY_URL is not None
-    transport = httpx.ASGITransport()
-    async with httpx.AsyncClient(transport=transport, base_url=GATEWAY_URL) as http_client:
+    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=10.0) as http_client:
         yield http_client
 
 
