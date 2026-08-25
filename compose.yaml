@@ -63,6 +63,8 @@ services:
       context: ./services/ai-gateway
     environment:
       AIVA_GATEWAY_LLM_BACKEND: mock
+      AIVA_GATEWAY_STT_BACKEND: mock
+      AIVA_GATEWAY_TTS_BACKEND: mock
     ports:
       - "19100:9100"
     healthcheck:
