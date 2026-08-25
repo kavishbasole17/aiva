@@ -13,7 +13,9 @@
   "dependencies": {
     "@aiva/ui": "workspace:*",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "motion": "^11.15.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

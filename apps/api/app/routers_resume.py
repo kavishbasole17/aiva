@@ -465,6 +465,66 @@ class ExtractedFieldLike:
         self.value = value
 
 
+def _summarize_run(run: ScoringRunRow | None) -> dict[str, object] | None:
+    if run is None:
+        return None
+    return {
+        "run_id": str(run.id),
+        "total_score": run.total_score,
+        "verdict": run.verdict,
+        "run_fingerprint": run.run_fingerprint,
+    }
+
+
+@router.get("/requisitions/{requisition_id}/candidates")
+async def list_candidates(
+    requisition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    await _load_requisition(db, user, requisition_id)
+    docs = (
+        (
+            await db.execute(
+                select(ResumeDocument)
+                .where(ResumeDocument.requisition_id == requisition_id)
+                .order_by(ResumeDocument.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    runs = (
+        (
+            await db.execute(
+                select(ScoringRunRow)
+                .where(ScoringRunRow.requisition_id == requisition_id)
+                .order_by(ScoringRunRow.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    latest_by_resume: dict[str, ScoringRunRow] = {}
+    for run in runs:
+        key = str(run.resume_id)
+        if key not in latest_by_resume:
+            latest_by_resume[key] = run
+
+    return {
+        "candidates": [
+            {
+                "resume_id": str(doc.id),
+                "filename": doc.filename,
+                "candidate_email": doc.candidate_email,
+                "created_at": doc.created_at.isoformat(),
+                "latest_run": _summarize_run(latest_by_resume.get(str(doc.id))),
+            }
+            for doc in docs
+        ]
+    }
+
+
 @router.get("/requisitions/{requisition_id}/scoring-runs")
 async def list_scoring_runs(
     requisition_id: uuid.UUID,

@@ -15,3 +15,4 @@ export {
   Skeleton,
   cn,
 } from "./components";
+export { EvidenceSpine, type SpineNodeData } from "./EvidenceSpine";
