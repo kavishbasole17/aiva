@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     jwt_secret: str = Field(min_length=24)
     ai_gateway_url: str = ""
+    invite_token_days: int = 14
     access_token_minutes: int = 15
     refresh_token_days: int = 14
     log_level: str = "INFO"
