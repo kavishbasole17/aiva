@@ -89,11 +89,32 @@ Deferred within M6: AI evaluation of answers + resume-inconsistency flags (needs
 model deployment for meaningful output — the gateway contract exists), candidate
 portal UI pages, file-upload question storage.
 
+### Milestone 7 (core) — DST-correct scheduling + local .ics
+
+Pure-function slot generation driven by recruiter availability rules (working-hours
+window, duration, buffer, weekend exclusion, blackout dates) computed in the
+recruiter's timezone via zoneinfo with PEP-495 round-trip detection of nonexistent
+wall times; emitted as UTC and deduplicated across regeneration runs. Unit tests
+cover America/New_York spring-forward (2:00–2:30 gap slots absent, durations intact),
+fall-back ambiguity (no duplicate wall-clock starts), weekend/blackout exclusion,
+buffer arithmetic, inverted ranges, non-UTC zones. Local RFC-5545 `.ics` generation
+with proper escaping and UTC formatting replaces any calendar API per §3. Booking
+endpoint flips slot status with conflict rejection and emits the invite file.
+All 7 CI jobs green.
+
+Deferred within M7: SMTP delivery of `.ics` invites and T-24h/T-1h reminders
+(requires self-hosted Postfix in compose — wired at M12 hardening), candidate-facing
+self-select UI (arrives with portal), interviewer-per-slot caps.
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
+| M8 | LiveKit pre-check, consent, STT/TTS adaptive interview loop, HUD | M7 + GPU/media infra |
+| M9 | Sandbox runner, editor, whiteboard, screen share, task discussion | M8 |
+| M10 | RAG FAQ, evaluation engine, report + PDF/Excel export | M9 |
+| M11 | Dashboard + blind screening, bias audit, integrity signals, kits, DSAR | M10 |
+| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
 | M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M6 | Questionnaire builder + candidate portal + evaluation | M4 |
 | M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
