@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPBearer
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +18,9 @@ from app.auth_service import (
     verify_password,
     verify_totp,
 )
-from app.deps import get_app_settings, get_db, require_roles
+from app.deps import get_app_settings, get_db, get_db_public, require_roles
 from app.models import Organization, Role, User
+from app.validation import EmailAddress
 
 router = APIRouter(tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -27,12 +28,12 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 class RegisterOrgRequest(BaseModel):
     organization_name: str = PydField(min_length=2, max_length=200)
-    admin_email: EmailStr
+    admin_email: EmailAddress
     admin_password: str = PydField(min_length=12)
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     password: str
     totp_code: str | None = None
 
@@ -66,7 +67,7 @@ class MeResponse(BaseModel):
 
 @router.post("/auth/register-org", status_code=201)
 async def register_organization(
-    body: RegisterOrgRequest, db: AsyncSession = Depends(get_db)
+    body: RegisterOrgRequest, db: AsyncSession = Depends(get_db_public)
 ) -> dict[str, object]:
     existing = (
         await db.execute(select(Organization).where(Organization.name == body.organization_name))

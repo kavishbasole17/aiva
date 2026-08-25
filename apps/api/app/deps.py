@@ -88,3 +88,25 @@ async def get_db(
         except Exception:
             await session.rollback()
             raise
+
+
+async def get_db_public(request: Request) -> AsyncIterator[AsyncSession]:
+    """DB session for genuinely public, org-agnostic endpoints (org registration).
+
+    Deliberately does not resolve or bind to any caller identity, even if the
+    request happens to carry a valid Bearer token for a different organization
+    (e.g. an already-authenticated staff member registering a new org from the
+    same browser session). Using the normal get_db here would bind RLS to the
+    caller's own organization_id via bind_rls_context, which then rejects the
+    INSERT of the new organization's admin user as a row-level-security
+    violation instead of using the bootstrap (no-org-context) exception.
+    """
+    factory = get_session_factory(request)
+    async with factory() as session:
+        try:
+            await bind_rls_context(session, organization_id=None, user_id=None, role=None)
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
