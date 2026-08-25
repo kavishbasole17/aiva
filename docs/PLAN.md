@@ -59,11 +59,27 @@ run_fingerprint — CI proves byte-identical fingerprints across repeated runs
 sniffing. Integration job exercises upload → JD → profile → score roundtrip against
 the live stack including containerized gateway.
 
+### Milestone 5 — Recruiter console shell + Evidence Spine v1
+
+Auth-gated React Router shell (login → protected routes, token store, sign-out).
+Pipeline page per requisition: scored candidate cards with verdict badges,
+score/name sorting and text filtering via FLIP spring reordering (motion `layout`),
+designed loading/empty/error states throughout. Resume detail page renders the
+Evidence Spine v1 from packages/ui — a scroll-linked drawn rail where each node is
+a score or extracted field; expanding a node reveals the literal source quote plus
+page/offset/confidence/extractor metadata, and LLM-judged dimensions cite their
+prompt-version+model evidence refs. Vite dev proxy keeps API traffic same-origin.
+Backend gained `GET /requisitions/{id}/candidates` (resume rows joined to latest
+scoring run). All 7 CI jobs green.
+
+Deferred within M5: Playwright E2E + axe audit wiring, 60fps trace capture,
+Lighthouse runs, command palette, saved views (M11/M12 hardening gates).
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
+| M6 | Questionnaire builder + candidate portal + evaluation | M4 |
 | M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
 | M6 | Questionnaire builder + candidate portal + evaluation | M4 |
 | M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
