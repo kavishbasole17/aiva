@@ -9,3 +9,5 @@ compose.yaml::http://minio:9000
 compose.yaml::http://127.0.0.1:9100
 apps/api/tests/*::http://testserver
 scripts/wait_ready.sh::http://localhost
+services/ai-gateway/tests/conftest.py::http://testserver
+.github/workflows/ci.yml::http://localhost:19100
