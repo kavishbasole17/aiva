@@ -154,3 +154,40 @@ Consequences: licence-safe, versioned, reproducible; woff2 preloading refinement
 with the performance pass in M5.
 
 
+
+## ADR-017 — Speech media (STT/TTS) behind gateway contracts, mock-first
+
+Context: M8 needs speech-to-text and text-to-speech for the adaptive interview loop,
+but faster-whisper weights and Piper ONNX voices require GPU/media infrastructure that
+does not exist in dev or CI. The LLM side already solved this shape at M3 with the
+mock/vLLM backend split.
+Decision: `/v1/stt` and `/v1/tts` live on the ai-gateway behind typed contracts
+(`Transcription`, `Synthesis` — both carrying provider and model ids per constraint 8.1).
+Deterministic mock providers are CI-default: TTS synthesizes real PCM16 WAV bytes whose
+duration tracks the requested text; STT returns hash-seeded synthetic transcripts with
+WAV-header duration parsing. `FasterWhisperTranscriber`/`PiperSpeaker` classes exist but
+raise a clear RuntimeError until packages+weights land at deployment; selecting them via
+`AIVA_GATEWAY_STT_BACKEND`/`AIVA_GATEWAY_TTS_BACKEND` is a deployment-time switch. The
+mypy overrides for their lazy imports (`faster_whisper.*`, `piper.*`) are expected-absence
+declarations, not suppressions of real errors.
+Consequences: the interview loop, HUD read-aloud, and transcript attribution are fully
+provable without GPUs; swapping providers changes zero call sites. Mock transcripts must
+never be presented as recognized speech — they are visibly synthetic token streams.
+
+## ADR-018 — Interview sessions: fail-closed consent/pre-check gates + deterministic loop
+
+Context: recording consent and equipment readiness gate a live interview that persists
+candidate audio-derived data. The questionnaire milestone established single-use raw
+tokens stored as SHA-256.
+Decision: interview sessions reuse that token discipline. The lifecycle
+(pending_consent → consent_granted → precheck_passed → active → completed/declined/aborted)
+is enforced server-side and fails closed: stale consent versions rejected, declining is
+terminal, pre-check reports validate against a versioned suite (stale suite version,
+missing/degraded required devices, unverified or sub-minimum connections all block start).
+The adaptive question loop itself is pure code (`interview_engine.py`) with fingerprinted
+plans derived from objective JD-vs-resume gaps — the LLM stays out of control flow, so any
+transcript replays to the same sequence. Migration 0007 backfills `aiva_app` grants that
+0004/0005 silently omitted (caught by M8's integration flow before it could surface as a
+runtime permission failure); append-only migration history is preserved by fixing forward.
+Consequences: consent records carry an immutable statement snapshot; LiveKit room/token
+infrastructure remains deferred to media-infra deployment without changing these contracts.

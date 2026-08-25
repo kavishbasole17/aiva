@@ -106,19 +106,53 @@ Deferred within M7: SMTP delivery of `.ics` invites and T-24h/T-1h reminders
 (requires self-hosted Postfix in compose — wired at M12 hardening), candidate-facing
 self-select UI (arrives with portal), interviewer-per-slot caps.
 
+### Milestone 8 (core) — Interview sessions: consent, device pre-check, adaptive STT/TTS loop, HUD
+
+`apps/api`: token-gated interview sessions (raw join token shown once at creation,
+SHA-256 stored — the questionnaire-invite discipline) with a fail-closed lifecycle
+pending_consent → consent_granted → precheck_passed → active → completed/declined/aborted.
+Consent is versioned: the candidate must accept the exact current statement version,
+declining is terminal, and no question is ever served before granted consent plus a
+passing device report. Pre-check validation (`app/precheck.py`) rejects stale suite
+versions, unknown statuses, missing/degraded required devices and unverified or
+sub-minimum connections. The adaptive loop (`app/interview_engine.py`) is pure code:
+question plans are fingerprinted from JD-vs-resume gaps (missing required skills,
+verified skills, stated-vs-required years), thin answers spend one scripted probe per
+topic before advancing, and transcripts replay deterministically. Turns persist with
+STT confidence/model/audio-hash attribution; staff endpoints expose session lists and
+full transcripts. Migration 0006 adds RLS-forced interview tables; migration 0007
+backfills `aiva_app` grants that migrations 0004/0005 omitted (a latent privilege gap
+found by this milestone's integration flow).
+
+`services/ai-gateway`: speech media behind stable typed contracts — `/v1/stt` and
+`/v1/tts` with pluggable providers (deterministic mock transcriber/speaker proven in
+CI; faster-whisper/Piper classes raise clear not-deployed errors). Mock TTS emits real
+PCM16 WAV bytes; mock STT returns hash-seeded synthetic transcripts with WAV-header
+duration parsing.
+
+`apps/web-candidate`: the portal is now real — join-by-token, consent screen, browser
+device pre-check gate (camera preview, mic level detection, speaker tone confirmation,
+latency+throughput sample), and the live HUD: status chips, elapsed timer, topic
+progress spine, question card with gateway-backed read-aloud, text or recorded-audio
+answering, transcript drawer, and end-session control. React Router wired; Vite proxy
+keeps traffic same-origin.
+
+Proven in CI integration job: full lifecycle against the live stack including
+containerized gateway — gates reject early start/failing pre-check/stale consent,
+consent-denial is terminal, audio turn round-trips through STT, engine closes within
+budget, terminal state rejects mutation, staff detail shows attributed transcript.
+The integration job now also runs the previously-unwired auth/resume/questionnaire
+lifecycle tests. All quality gates green.
+
+Deferred within M8: LiveKit room infrastructure + client SDK tokens (needs media
+infra in compose — interface unchanged when it lands), faster-whisper/Piper weights
+(GPU deployment), InsightFace identity verification and MediaPipe proctoring signals
+(M11 integrity work), §13 `--network none` proof.
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M8 | LiveKit pre-check, consent, STT/TTS adaptive interview loop, HUD | M7 + GPU/media infra |
-| M9 | Sandbox runner, editor, whiteboard, screen share, task discussion | M8 |
-| M10 | RAG FAQ, evaluation engine, report + PDF/Excel export | M9 |
-| M11 | Dashboard + blind screening, bias audit, integrity signals, kits, DSAR | M10 |
-| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
-| M5 | Recruiter console: pipeline board, candidate detail, Evidence Spine v1 | M1, M4 |
-| M6 | Questionnaire builder + candidate portal + evaluation | M4 |
-| M7 | Scheduling, availability rules, .ics, SMTP reminders | M6 |
-| M8 | LiveKit pre-check, consent, STT/TTS adaptive interview loop, HUD | M7 |
 | M9 | Sandbox runner, editor, whiteboard, screen share, task discussion | M8 |
 | M10 | RAG FAQ, evaluation engine, report + PDF/Excel export | M9 |
 | M11 | Dashboard + blind screening, bias audit, integrity signals, kits, DSAR | M10 |

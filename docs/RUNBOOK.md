@@ -23,6 +23,7 @@ failure (see DECISIONS ADR-013).
 | Postgres 16 | 15432 | user `aiva`, db `aiva`, pgvector + pg_trgm enabled |
 | Redis 7 | 16379 | AOF on |
 | MinIO | 19000 (console 19001) | bucket `aiva-artifacts` |
+| ai-gateway | 19100 | mock LLM/STT/TTS backends; `/media-backends` shows active providers |
 | web-recruiter dev | 15173 | `pnpm dev` in `apps/web-recruiter` |
 | web-candidate dev | 15174 | `pnpm dev` in `apps/web-candidate` |
 
