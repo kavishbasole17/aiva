@@ -103,7 +103,11 @@ async def test_full_authorization_matrix(http: httpx.AsyncClient) -> None:
         (
             "POST",
             "/auth/register-org",
-            {"organization_name": "X", "admin_email": "x@x.test", "admin_password": STAFF_PASSWORD},
+            {
+                "organization_name": "Xco",
+                "admin_email": "x@x.test",
+                "admin_password": STAFF_PASSWORD,
+            },
             201,
         ),
         (

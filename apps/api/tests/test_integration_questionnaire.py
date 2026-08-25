@@ -1,4 +1,5 @@
 import os
+import uuid
 
 import httpx
 import pytest
@@ -24,18 +25,18 @@ async def http() -> httpx.AsyncClient:
 
 
 async def _staff_context(http: httpx.AsyncClient) -> tuple[dict[str, str], str]:
+    suffix = uuid.uuid4().hex[:8]
+    admin_email = f"quest-admin-{suffix}@example.test"
     org = await http.post(
         "/auth/register-org",
         json={
-            "organization_name": "Quest Org",
-            "admin_email": "quest-admin@example.test",
+            "organization_name": f"Quest Org {suffix}",
+            "admin_email": admin_email,
             "admin_password": PASSWORD,
         },
     )
     assert org.status_code == 201, org.text
-    login = await http.post(
-        "/auth/login", json={"email": "quest-admin@example.test", "password": PASSWORD}
-    )
+    login = await http.post("/auth/login", json={"email": admin_email, "password": PASSWORD})
     return {"Authorization": f"Bearer {login.json()['access_token']}"}, org.json()[
         "organization_id"
     ]
@@ -108,7 +109,9 @@ async def test_questionnaire_lifecycle_with_autosave_and_single_use(
     )
     assert submit_ok.status_code == 200
     assert submit_ok.json()["submitted"] is True
-    assert submit_ok.json()["history_entries"] >= 3
+    # Two history entries: the autosave and the successful submit. The rejected
+    # incomplete-submission attempt correctly rolls back and leaves no trace.
+    assert submit_ok.json()["history_entries"] == 2
 
     replay = await http.get(f"/public/questionnaires/{token}")
     assert replay.status_code == 409
