@@ -134,6 +134,11 @@ async def rotate_refresh_token(
             .where(RefreshToken.family_id == row.family_id, RefreshToken.revoked_at.is_(None))
             .values(revoked_at=utcnow())
         )
+        # This revocation must survive even though the request ultimately returns
+        # an error: the caller (get_db) rolls back the session on any exception,
+        # which would otherwise silently undo the family revocation and defeat
+        # reuse detection entirely. Commit explicitly before raising.
+        await session.commit()
         raise AuthError("Refresh token reuse detected; family revoked", status_code=401)
 
     if not row.is_live():
