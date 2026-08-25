@@ -36,8 +36,21 @@ async def record_event(
     organization_id: uuid.UUID | None = None,
     payload: dict[str, object] | None = None,
 ) -> AuditEvent:
+    # The hash chain is scoped per organization_id (None counts as its own
+    # scope for system-level events), not global. Every other table in this
+    # app enforces strict per-org isolation via forced RLS; a single chain
+    # interleaved across organizations would either force an org's auditor to
+    # see another org's event hashes to verify their own chain, or make
+    # per-org verification (see verify_chain) spuriously report tampering for
+    # every organization but the very first one ever created, since that
+    # org's first visible event's prev_hash would point outside its own scope.
     last = (
-        await session.execute(select(AuditEvent).order_by(AuditEvent.sequence.desc()).limit(1))
+        await session.execute(
+            select(AuditEvent)
+            .where(AuditEvent.organization_id == organization_id)
+            .order_by(AuditEvent.sequence.desc())
+            .limit(1)
+        )
     ).scalar_one_or_none()
 
     event = AuditEvent(
