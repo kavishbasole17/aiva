@@ -12,6 +12,7 @@ from app.routers_auth import router as auth_router
 from app.routers_org import router as org_router
 from app.routers_questionnaire import router as questionnaire_router
 from app.routers_resume import router as resume_router
+from app.routers_scheduling import router as scheduling_router
 from app.security_headers import SecurityHeadersMiddleware
 from app.settings import Settings, get_settings
 
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(org_router)
     app.include_router(resume_router)
     app.include_router(questionnaire_router)
+    app.include_router(scheduling_router)
     app.include_router(audit_router)
     return app
 
