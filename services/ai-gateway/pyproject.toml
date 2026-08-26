@@ -53,7 +53,7 @@ python_version = "3.11"
 # raise a clear RuntimeError when weights/packages are absent (ADR-017);
 # their absence at static time is expected, not an error.
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "piper.*"]
+module = ["faster_whisper.*", "piper.*", "sentence_transformers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

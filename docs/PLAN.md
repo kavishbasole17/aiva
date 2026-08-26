@@ -149,13 +149,164 @@ infra in compose — interface unchanged when it lands), faster-whisper/Piper we
 (GPU deployment), InsightFace identity verification and MediaPipe proctoring signals
 (M11 integrity work), §13 `--network none` proof.
 
+### Milestone 9 — Live-coding workspace: sandbox runner, editor, whiteboard, task discussion
+
+`services/sandbox-runner`: a new microservice executing candidate-submitted Python/
+JavaScript under process-level isolation — dedicated unprivileged `sandbox` account
+(setuid-dropped into per execution, never the server's own uid, so RLIMIT_NPROC and any
+escape stay scoped away from the service itself), POSIX rlimits (CPU seconds, address
+space, process count, open files, output size), a routeless network namespace via
+`unshare --net`, ephemeral per-run temp directories, and a hard wall-clock timeout that
+kills the whole process group. Fails closed if `unshare` is unavailable rather than
+degrading to an unisolated run. See ADR-019 for the full isolation design and its honest
+limits (process-level, not container/VM — a hardened runtime is deferred to M12).
+
+`apps/api`: migration 0009 adds five session-scoped, org-scoped, RLS-forced tables
+(`coding_tasks`, `code_snapshots`, `code_executions`, `whiteboard_strokes`,
+`discussion_messages`) with the same bootstrap-safe policy as interview_sessions.
+`routers_workspace.py` gives staff (JWT) task creation plus read/annotate access to
+everything, and gives the candidate (raw token, same discipline as the interview/
+questionnaire flows) autosaved code editing, sandboxed run requests proxied to
+sandbox-runner, whiteboard strokes, and task discussion — candidate writes gated to an
+ACTIVE session, reads open through any non-terminal state. Screen share is a stable
+public endpoint that returns 501 rather than a fake success (no WebRTC/LiveKit
+infrastructure in this compose stack — same mock-now/hardened-at-deployment precedent as
+ADR-017's STT/TTS backends, not a new deferral pattern).
+
+`apps/web-candidate`: a Workspace tab alongside the interview Q&A — autosaving code editor
+with a run button and stdout/stderr/exit-code display, a canvas whiteboard synced with the
+interviewer, and a discussion thread. `apps/web-recruiter`: a new Sessions list page and
+Interview Session detail page — transcript, task creation, a live (polled) read-only view
+of the candidate's code and run history, a bidirectional whiteboard, and discussion.
+
+Proven end-to-end against the live stack (real Postgres/RLS, real ai-gateway, real
+sandbox-runner): task creation → candidate autosave → sandboxed run → staff sees the
+result, whiteboard strokes from both sides render together, discussion round-trips both
+ways, cross-org staff access 404s, and candidate writes reject with 409 once the session
+is terminal (`tests/test_integration_workspace.py`). Sandbox isolation itself is unit-
+tested directly: timeout kills an infinite loop, RLIMIT_AS stops an unbounded allocation,
+a real socket connect attempt from inside the sandbox is confirmed blocked by the network
+namespace, PID-namespace isolation is confirmed by reading back the sandboxed process's
+own pid (1, not the host would-be pid), and the per-run uid pool is proven to never hand
+out the same uid to two concurrent runs — not just assumed. All quality gates green
+(ruff/black/mypy --strict/bandit/pytest) on both apps/api and the new
+services/sandbox-runner.
+
+A security review run against this diff before considering M9 done caught a real gap in
+the first cut: every execution setuid-dropped into the *same* fixed sandbox account, which
+meant the "ephemeral per-run temp directory" isolation claim didn't actually hold under
+concurrency — any run's code could list `/tmp`, find another live run's directory (shared
+uid, world-listable base-image `/tmp`), and read or overwrite it. Fixed via `UidPool` (a
+distinct uid per concurrent execution, never shared, acquired/released around each run)
+plus PID-namespace isolation (`unshare --pid --fork`, closing the matching `/proc`
+visibility gap) — see ADR-020. Same discipline as the `0007`/`0008` grants-backfill
+migrations found during M8: catch it, fix it forward, write down what was actually wrong
+and why the fix is complete, not just that a fix happened.
+
+Deferred within M9: a real-time collaborative editor (CRDT/OT) — the editor uses debounced
+autosave + poll, same as M6's questionnaire autosave, not live keystroke sync; screen share
+backend (WebRTC/LiveKit, ADR-019); hardened sandbox runtime (gVisor/Firecracker/nsjail,
+M12).
+
+### Milestone 10 — RAG FAQ, evaluation engine, PDF/Excel export
+
+`services/ai-gateway`: a new `/v1/embed` endpoint behind an `EmbeddingProvider` interface —
+`MockEmbedder` (deterministic, hash-seeded, L2-normalized 384-dim vectors) now,
+`SentenceTransformerEmbedder` deferred to GPU deployment, same mock-now/hardened-later
+split as ADR-017's STT/TTS backends. Only the embedding *model* is mocked — retrieval is
+real: `apps/api` migration 0010 adds `faq_documents` with a genuine pgvector column and an
+ivfflat cosine-similarity index, and `routers_faq.py`'s candidate-facing `ask_faq` runs an
+actual `ORDER BY embedding <=> :query` search, then feeds only what retrieval found into a
+new `faq_answer` gateway prompt (`FaqAnswer` response model, same citation discipline as
+every other judgement). Staff write FAQ documents; the candidate (raw token, same
+discipline as interview/workspace endpoints) asks questions from within the interview
+Workspace tab.
+
+`apps/api`: `evaluation_engine.py` deterministically aggregates resume score, questionnaire
+completion, interview completeness, and coding-task pass rate into one weighted verdict —
+same "arithmetic and thresholds live only in application code" rule `scoring.py`
+established; the gateway-backed `evaluation_summary` narrative is additive-only and
+degrades gracefully (a persisted report keeps its full deterministic verdict even if the
+gateway is unreachable when generated). `report_export.py` renders PDF (reportlab) and
+Excel (openpyxl) straight from the persisted `EvaluationReport.payload` snapshot, streamed
+on demand from new staff-only export endpoints — see ADR-021.
+
+`apps/web-candidate` gained an FAQ tab in the interview Workspace; `apps/web-recruiter`
+gained an Evaluation section on the resume detail page (generate, view component
+breakdown/narrative, download PDF/Excel).
+
+Proven end-to-end against the live stack (real Postgres/pgvector, real ai-gateway):
+`test_integration_faq.py` proves retrieval actually returns relevant documents and degrades
+gracefully with zero FAQ documents; `test_integration_evaluation.py` proves every component
+populates from real data, PDF/Excel exports have valid file signatures, and cross-org
+access to a report 404s. `evaluation_engine.py`'s weighting/verdict-banding is unit-tested
+directly (renormalization over missing components, determinism). All quality gates green
+(ruff/black/mypy --strict/bandit/pytest) on `apps/api` and `services/ai-gateway`.
+
+Caught during verification, not after: screenshot-testing the new Evaluation panel surfaced
+a pre-existing crash in `ResumeDetail.tsx` — `GET .../scoring-runs` (the list endpoint)
+never returned `checks`/`dimensions`, but the page's "latest run" selector assumed it did,
+throwing on any resume with a scoring run. Fixed by taking the already-newest-first list's
+first entry directly rather than filtering on fields the list endpoint never populates.
+Unrelated to M10's own code but blocking its verification, so fixed forward rather than
+left for a future milestone to rediscover — same "catch it here, fix it here" precedent as
+the M8/M9 grants-backfill and sandbox-isolation findings.
+
+### Milestone 11 — Dashboard, blind screening, scoring audit, integrity signals, kits, DSAR
+
+`routers_dashboard.py`: org-wide pipeline aggregates (requisitions by status, scoring
+verdict distribution, interview status distribution, questionnaire submission rate,
+coding-task pass rate) via plain SQL COUNT/GROUP BY — no candidate-identifying data
+crosses this endpoint. `apps/web-recruiter` gained a Dashboard page.
+
+Blind screening: `?blind=true` on `GET /resumes/{id}` and
+`GET /requisitions/{id}/candidates` redacts name/email/phone/linkedin field values
+(and the resume's own filename/candidate_email) so a first review pass can focus on
+skills/experience signal rather than identity — a toggle in `apps/web-recruiter`'s
+Pipeline and Resume Detail pages.
+
+Bias audit and integrity signals were both scoped down from PLAN.md's original naming,
+deliberately and documented (ADR-023): this system collects no protected-characteristic
+data, so a demographic disparate-impact audit isn't implementable responsibly —
+`scoring_audit.py` instead checks scoring-pipeline consistency (verdict drift across
+identical-input re-runs, missing evidence citations, suspiciously narrow score bands).
+Integrity signals ship only what's genuinely real without an ML model: browser-reported
+tab-blur/visibility/fullscreen-exit events during an active interview
+(`routers_integrity.py`, migration `0012_integrity_signals`) — face/gaze-based
+proctoring (InsightFace/MediaPipe) stays honestly deferred to GPU deployment, same as
+M8/M9's docs already flagged.
+
+"Kits": scoped to what the schema actually supports cleanly — cloning a proven
+questionnaire onto a new requisition (`POST /questionnaires/{id}/clone`). A reusable
+coding-task template library would need a new entity (coding tasks are session-scoped,
+not requisition-scoped, per M9's schema) and is left for a future pass rather than
+half-built here.
+
+DSAR: `routers_dsar.py` gives admin-only staff a full export of every record tied to a
+candidate's email, and an erasure path that overwrites (never deletes) the PII-bearing
+columns across every table that holds candidate-authored content — migration
+`0011_dsar_update_grants` adds a narrowly-scoped UPDATE grant (not DELETE) on the four
+append-only tables that needed it, preserving the "evidence rows are never removed"
+discipline (ADR-022). A known, documented gap: JSONB evidence payloads that embed
+literal resume quotes are not deep-redacted in this pass.
+
+Proven end-to-end against the live stack: `test_integration_m11.py` covers all six
+pieces, plus a role-check that non-admin staff are rejected from DSAR export.
+`scoring_audit.py` is unit-tested directly (drift/citation/band-width cases). One real
+bug caught during verification and fixed forward: the dashboard's coding-task pass-rate
+query used `max(uuid)` to find each task's latest execution — Postgres has no such
+aggregate function — fixed by joining on `(task_id, created_at)` instead, which is what
+"latest" actually means here anyway. A security review of the diff caught two real DSAR
+erasure gaps — `ResumeDocument.filename` and `ExtractedFieldRow.source_quote` were left
+unredacted alongside the fields that were, and the export endpoint took the candidate's
+raw email as a GET query parameter instead of a POST body — both fixed before this
+milestone was called done (ADR-022). All quality gates green
+(ruff/black/mypy --strict/bandit/pytest, pnpm lint/typecheck/build).
+
 ## Remaining milestones
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M9 | Sandbox runner, editor, whiteboard, screen share, task discussion | M8 |
-| M10 | RAG FAQ, evaluation engine, report + PDF/Excel export | M9 |
-| M11 | Dashboard + blind screening, bias audit, integrity signals, kits, DSAR | M10 |
 | M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
 
 ## Known open items carried forward

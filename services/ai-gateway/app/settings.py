@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     stt_model: str = "faster-whisper-large-v3"
     tts_backend: str = "mock"
     tts_voice: str = "piper-onnx-en_US-lessac-medium"
+    embed_backend: str = "mock"
+    embed_model: str = "all-MiniLM-L6-v2"
     log_level: str = "INFO"
 
 

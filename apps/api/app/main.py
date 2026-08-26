@@ -9,11 +9,17 @@ from app.health import router as health_router
 from app.logging_setup import configure_logging
 from app.routers_audit import router as audit_router
 from app.routers_auth import router as auth_router
+from app.routers_dashboard import router as dashboard_router
+from app.routers_dsar import router as dsar_router
+from app.routers_evaluation import router as evaluation_router
+from app.routers_faq import router as faq_router
+from app.routers_integrity import router as integrity_router
 from app.routers_interview import router as interview_router
 from app.routers_org import router as org_router
 from app.routers_questionnaire import router as questionnaire_router
 from app.routers_resume import router as resume_router
 from app.routers_scheduling import router as scheduling_router
+from app.routers_workspace import router as workspace_router
 from app.security_headers import SecurityHeadersMiddleware
 from app.settings import Settings, get_settings
 
@@ -49,6 +55,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(questionnaire_router)
     app.include_router(scheduling_router)
     app.include_router(interview_router)
+    app.include_router(integrity_router)
+    app.include_router(workspace_router)
+    app.include_router(faq_router)
+    app.include_router(evaluation_router)
+    app.include_router(dsar_router)
+    app.include_router(dashboard_router)
     app.include_router(audit_router)
     return app
 

@@ -191,3 +191,151 @@ transcript replays to the same sequence. Migration 0007 backfills `aiva_app` gra
 runtime permission failure); append-only migration history is preserved by fixing forward.
 Consequences: consent records carry an immutable statement snapshot; LiveKit room/token
 infrastructure remains deferred to media-infra deployment without changing these contracts.
+
+## ADR-019 — Sandbox code execution: privileged supervisor, unprivileged per-job account
+
+Context: M9's live-coding task needs to execute candidate-submitted Python/JavaScript.
+Unlike every other service in this repo, `sandbox-runner` cannot drop root at container
+start (`USER aiva`, the pattern every other Dockerfile uses) — it needs root's ability to
+setuid/setgid per execution.
+Decision: `sandbox-runner`'s server process stays root; a dedicated, unused-for-anything-else
+`sandbox` account (fixed uid/gid 6666) is what candidate code actually runs as, dropped into
+via `setresuid`/`setresgid` in a `preexec_fn` immediately before exec, after POSIX rlimits
+(CPU seconds, address space, process count, open files, output size) are set on the
+about-to-be-unprivileged process. The run also execs through `unshare --map-root-user --net`
+for a routeless network namespace, and writes to an ephemeral per-run temp directory. This is
+the standard "privileged supervisor, unprivileged per-job account" shape used by
+code-execution sandboxes (e.g. Judge0) — not an oversight of the no-root convention.
+Consequences: RLIMIT_NPROC and any process-level escape are scoped to the dedicated `sandbox`
+uid, never the server's own uid, because nothing else on the system runs as that uid. This is
+process-level isolation on a shared kernel, not a container/VM boundary — a kernel exploit
+still escapes it. A hardened runtime (gVisor/Firecracker/nsjail+seccomp) is deferred to M12
+deployment hardening, same mock-now/hardened-at-deployment precedent as ADR-017's STT/TTS
+backends; `app/executors.py`'s `Executor` interface does not change when that lands. Screen
+share (also M9) gets the same treatment one level up: a stable public endpoint that returns a
+clear 501 rather than a fake success, because it needs WebRTC/LiveKit infrastructure this
+compose stack doesn't run — mirroring ADR-017/018's mock-vs-real backend split rather than
+inventing a new deferral pattern.
+
+## ADR-020 — Sandbox isolation: one dedicated uid per concurrent run, not one shared uid
+
+Context: ADR-019's first cut of `sandbox-runner` setuid-dropped every execution into the
+*same* fixed `sandbox` account (uid 6666). A security review of the M9 diff caught that
+this defeats the "ephemeral per-run temp directory" isolation claim under concurrency:
+`os.chown(tmpdir, sandbox_uid, sandbox_gid)` + `chmod 0o700` only restricts access to the
+owning *uid*, and since every run shares that uid, any run's sandboxed code can
+`os.listdir("/tmp")` (world-listable on the base image), find every other live run's
+directory by name, and freely read or overwrite it — a concrete, exploitable cross-session
+(and cross-organization, if a deployment runs interviews for more than one org
+concurrently) data leak reachable through the platform's own normal `/run` endpoint.
+Sharing a uid also lets concurrent runs see and `kill()` each other via `/proc`, since
+PID-namespace isolation wasn't in place either.
+Decision: `UidPool` (`app/executors.py`) hands out a distinct uid per concurrent execution
+from a fixed pool (`sandbox0`..`sandbox31`, uids 6666-6697, pinned in the Dockerfile) —
+acquired before a run starts and released after, blocking rather than falling back to a
+shared uid if the pool is exhausted, so the safety property holds under load instead of
+degrading silently. The `unshare` wrapper also gained `--pid --fork`: PID-namespace
+visibility is asymmetric (a namespace can see its descendants, never a sibling or an
+ancestor), so two concurrent runs — each in the container's main PID namespace's own
+child namespace, siblings of each other — cannot enumerate, read `/proc/<pid>/*` for, or
+signal one another regardless of uid.
+Consequences: two independent isolation layers (distinct uid, distinct PID namespace) each
+close a different half of the same concurrency gap, so a bug in one doesn't reopen it
+alone. Pool exhaustion is a wait, not a failure mode — with the default pool size (32) far
+above realistic concurrent live-coding sessions for an on-prem deployment, this is not
+expected to bind in practice. `tests/test_executors.py::test_pid_namespace_hides_other_processes`
+and `test_uid_pool_never_hands_out_the_same_uid_twice_concurrently` prove both properties
+directly rather than assuming them.
+
+## ADR-021 — M10: real pgvector retrieval behind a mock embedder; deterministic evaluation, LLM narrative-only
+
+Context: M10 needed two more AI-adjacent capabilities — a candidate-facing RAG FAQ and a
+cross-signal candidate evaluation — without a GPU model any more than M3's DimensionScore
+scoring had one.
+Decision, RAG FAQ: the gateway grew a `/v1/embed` endpoint behind an `EmbeddingProvider`
+interface (`MockEmbedder` now, `SentenceTransformerEmbedder` deferred to GPU deployment,
+same shape as ADR-017's STT/TTS split). Critically, only the *embedding model* is mocked —
+retrieval itself is real: `faq_documents.embedding` is a genuine pgvector column with an
+ivfflat cosine-similarity index, and `ask_faq` runs an actual `ORDER BY embedding <=>
+:query` search, not a stub. The LLM only ever sees documents retrieval already found; it
+cannot invent the retrieval step, matching constraint 8.1's citation discipline.
+Decision, evaluation engine: `evaluation_engine.py` deterministically aggregates resume
+score, questionnaire completion, interview completeness, and coding-task pass rate into one
+weighted verdict — mirrors `scoring.py`'s rule that arithmetic and thresholding happen only
+in application code, never inside a prompt. The gateway-backed `evaluation_summary`
+narrative is additive and best-effort: if the gateway is unreachable, `_generate_narrative`
+swallows the error and the persisted report still has its full deterministic verdict,
+components, and scores — a missing narrative degrades the report, it never blocks it.
+Consequences: PDF/Excel export (`report_export.py`, reportlab/openpyxl) renders straight
+from the persisted `EvaluationReport.payload` snapshot, so a report's export is always
+consistent with what was actually computed and stored, not re-derived at download time.
+`aiva-artifacts` (MinIO) is intentionally not used here — exports are generated on demand
+and streamed, not archived; archiving/retention is left to M12 as originally scoped.
+
+## ADR-022 — DSAR erasure: UPDATE-in-place, never DELETE, on a narrowly-scoped new grant
+
+Context: M11 needed a GDPR/CCPA right-to-erasure path, but `code_snapshots`,
+`code_executions`, `discussion_messages`, and `evaluation_reports` are deliberately
+append-only (SELECT/INSERT-only, ADR-019/020/021 precedent) with no DELETE grant at the
+database role level, specifically so routine application code can never tamper with
+evidence rows. A blanket DELETE grant to satisfy erasure would reopen exactly the risk
+that discipline exists to prevent.
+Decision: migration `0011_dsar_update_grants` grants UPDATE only — never DELETE — on
+those four tables, and `routers_dsar.py`'s erase endpoint overwrites the specific
+PII-bearing columns in place (candidate email, resume full text, answer/message/code
+text) rather than removing rows. Row counts and non-PII content (scores, verdicts,
+staff-authored prompts) stay intact for audit and statistical integrity. Erasure is
+gated to `Role.ADMIN` only — deliberately narrower than the `STAFF_ROLES` every other
+router in this codebase uses, because it is destructive and rare, not routine recruiter
+workflow.
+Consequences, stated plainly rather than glossed over: JSONB evidence payloads that
+embed literal resume quotes (`scoring_runs.checks_payload`/`dimensions_payload`) are not
+deep-redacted by this pass — only top-level PII fields are. This is a known, documented
+gap (see `routers_dsar.py`'s module docstring), not a silent one.
+
+A security review of this diff caught two real issues in the first cut, both fixed
+before M11 was called done. First (High): the erase loop redacted
+`ResumeDocument.full_text`/`.candidate_email` and `ExtractedFieldRow.value`, but left
+`ResumeDocument.filename` and `ExtractedFieldRow.source_quote` untouched on those same
+rows — both routinely contain the candidate's identity (filenames like
+`jane_doe_resume.pdf`; `source_quote` is the ~80 raw characters of resume text
+surrounding a matched PII span per `text_extract.py`), and both were readable right back
+through the ordinary, non-blind `GET /resumes/{id}` endpoint any `STAFF_ROLES` member
+could call — a real, complete-if-not-for-this gap in an erasure feature specifically
+built for compliance. Fixed by redacting both. Second (Medium): `GET /dsar/export`
+accepted the candidate's raw email as a query parameter while the sibling erase endpoint
+took it in a POST body — inconsistent, and a query string is exactly what reverse-proxy/
+access logs capture by default, undermining the same file's own discipline of only ever
+persisting a SHA-256 hash of the email to the audit log. Fixed by switching export to
+POST with the email in the body, matching `DsarEraseRequest`'s shape.
+
+## ADR-023 — Bias audit scoped to scoring consistency; integrity signals scoped to zero-ML browser events
+
+Context: PLAN.md's M11 line item names "bias audit" and "integrity signals" without
+specifying what either means concretely, and both are the kind of feature that's easy
+to over-claim.
+Decision, bias audit: this system collects no protected-characteristic data about
+candidates (race, gender, age, disability, etc.) — appropriately, since collecting it
+would itself be a significant legal/privacy decision never made here. A disparate-impact
+analysis is therefore not implementable responsibly. `scoring_audit.py` instead checks
+what the data actually supports verifying: verdict drift (the same resume, same weight
+profile, different verdict — scoring.py promises byte-identical runs for identical
+inputs), missing evidence citations (defense-in-depth check that the gateway contract's
+citation requirement actually held on the way into the database), and narrow score bands
+(a weight profile whose runs cluster suspiciously tightly, which more often means the
+profile isn't discriminating between candidates than that every candidate is equally
+qualified).
+Decision, integrity signals: face/gaze-based proctoring (InsightFace/MediaPipe) is
+GPU-model-dependent and was already flagged deferred to deployment across M8/M9's docs.
+Unlike STT/TTS/embeddings, there is no frame-capture pipeline in the candidate app to
+mock a backend *for* yet — a mock face-detection analyzer would be inventing input, not
+standing in for a real one, so migration `0012_integrity_signals` and
+`routers_integrity.py` ship only what's genuinely real today: the browser reporting when
+the candidate's tab loses focus, exits fullscreen, or becomes hidden during an active
+interview. No ML, no mock, no pretending — a real signal a hiring team can act on now,
+with the harder, model-dependent signals left honestly deferred.
+Consequences: both features are smaller than their PLAN.md names might suggest, on
+purpose. Scope creep into an unimplementable-responsibly demographic audit or an
+unbacked ML proctoring mock would have cost more (in false confidence, and in the
+compliance risk of pretending to check something the system has no data to check) than
+the narrower, honest versions shipped here.

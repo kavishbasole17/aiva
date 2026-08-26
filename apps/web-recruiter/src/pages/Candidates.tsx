@@ -34,6 +34,7 @@ export function CandidatesPage() {
   const [error, setError] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("score");
   const [filter, setFilter] = useState("");
+  const [blind, setBlind] = useState(false);
 
   useEffect(() => {
     document.title = "AIVA — Pipeline";
@@ -44,7 +45,7 @@ export function CandidatesPage() {
     let cancelled = false;
     setCandidates(null);
     setError(null);
-    listCandidates(requisitionId)
+    listCandidates(requisitionId, blind)
       .then((response) => {
         if (!cancelled) setCandidates(response.candidates);
       })
@@ -54,7 +55,7 @@ export function CandidatesPage() {
     return () => {
       cancelled = true;
     };
-  }, [requisitionId]);
+  }, [requisitionId, blind]);
 
   const visible = useMemo(() => {
     if (!candidates) return [];
@@ -80,7 +81,7 @@ export function CandidatesPage() {
       <main className="mx-auto max-w-2xl px-6 py-16 text-[var(--mist)]">
         <EmptyState
           title="Open a requisition"
-          body="Append ?req=<requisition-id> to this page. Requisition browsing arrives with the full dashboard in Milestone 11."
+          body="Append ?req=<requisition-id> to this page to open a specific pipeline. See the Dashboard link above for org-wide aggregate stats — a requisition picker/browser for this page specifically is still on the backlog."
         />
       </main>
     );
@@ -94,6 +95,12 @@ export function CandidatesPage() {
           <p className="mono mt-1 text-xs text-[var(--haze)]">requisition {requisitionId}</p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            to={`/sessions?req=${requisitionId}`}
+            className="text-sm text-[var(--signal-text)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--signal)]"
+          >
+            Interview sessions →
+          </Link>
           <Input
             aria-label="Filter candidates"
             placeholder="Filter by name or email"
@@ -106,6 +113,9 @@ export function CandidatesPage() {
             onClick={() => setSortMode((mode) => (mode === "score" ? "name" : "score"))}
           >
             Sort: {sortMode === "score" ? "Score" : "Name"}
+          </Button>
+          <Button variant={blind ? "primary" : "ghost"} onClick={() => setBlind((b) => !b)}>
+            {blind ? "Blind screening: on" : "Blind screening: off"}
           </Button>
         </div>
       </header>
@@ -141,7 +151,7 @@ export function CandidatesPage() {
             <Card interactive className="flex flex-wrap items-center justify-between gap-4 py-4">
               <div>
                 <Link
-                  to={`/resumes/${candidate.resume_id}?req=${requisitionId}`}
+                  to={`/resumes/${candidate.resume_id}?req=${requisitionId}${blind ? "&blind=1" : ""}`}
                   className="font-medium hover:text-[var(--signal-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--signal)]"
                 >
                   {candidate.candidate_email ?? candidate.filename}

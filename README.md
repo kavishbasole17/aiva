@@ -5,17 +5,22 @@ runtime network calls, every model served locally.
 
 ## Status
 
-Milestones 0 through 8 (core) are delivered and, as of this update, genuinely
+Milestones 0 through 11 (core) are delivered and, as of this update, genuinely
 CI-verified — see the "Full roadmap" section below for exactly what that
 means and the two narrower gaps (Milestone 5's candidates endpoint,
 Milestone 7's scheduling integration test) that remain open. In practical
 terms: authentication/RBAC/audit, the AI gateway contract, resume ingestion
-and scoring, the recruiter console shell, questionnaires, scheduling, and
-the full consent-precheck-live-interview candidate experience (including a
-working `apps/web-candidate` frontend) are all built and working end to
-end against a live stack. Milestones 9 through 12 (sandboxed technical
-assessments, RAG FAQ/evaluation/reporting, dashboards/bias-audit/integrity
-signals, and production hardening) have not started. Governance docs:
+and scoring, the recruiter console shell, questionnaires, scheduling, the
+full consent-precheck-live-interview candidate experience (including a
+working `apps/web-candidate` frontend), the M9 live-coding workspace
+(sandboxed code execution, autosaved editor, whiteboard, task discussion),
+the M10 RAG FAQ + cross-signal evaluation engine with PDF/Excel export, and
+the M11 dashboard/blind-screening/scoring-audit/integrity-signals/kits/DSAR
+set (see `docs/PLAN.md`'s Milestone 11 section for exactly what each was
+scoped to, and why two of those names were deliberately narrowed — ADR-023)
+are all built and working end to end against a live stack. Only Milestone
+12 (load test, pen-test pass, retention jobs, Helm chart — production
+hardening) has not started. Governance docs:
 `docs/PLAN.md` (build order and verification evidence), `docs/DECISIONS.md`
 (architecture decision records), `docs/RUNBOOK.md` (day-2 operations), and
 `docs/MODEL_CARD.md` (AI model inventory — still mostly empty since no real
@@ -365,6 +370,122 @@ Deferred within M8 (tracked): LiveKit room infrastructure and client SDK tokens
 faster-whisper/Piper weights (GPU deployment), InsightFace identity verification
 and MediaPipe proctoring signals (M11 integrity work), the §13 `--network none`
 end-to-end proof.
+
+## Live-coding workspace (`services/sandbox-runner`, `apps/api`, both web apps) — Milestone 9 (delivered)
+
+A new microservice, `services/sandbox-runner`, executes candidate-submitted
+Python/JavaScript under process-level isolation: a dedicated unprivileged
+`sandbox` account (setuid-dropped into per execution — the server itself
+stays root specifically to enable that drop, see ADR-019), POSIX rlimits
+(CPU seconds, address space, process count, open files, output size), a
+routeless network namespace via `unshare --net`, an ephemeral per-run temp
+directory, and a hard wall-clock timeout that kills the whole process
+group. It fails closed (503) if `unshare` isn't available rather than
+running code unisolated. This is process-level isolation on a shared
+kernel, not a container/VM boundary — ADR-019 states that limit plainly; a
+hardened runtime (gVisor/Firecracker/nsjail) is deferred to M12.
+
+`apps/api` migration `0009_workspace` adds five session-scoped, RLS-forced
+tables (coding tasks, autosaved code snapshots, code executions, whiteboard
+strokes, discussion messages) and `routers_workspace.py` gives staff
+(JWT) task creation and full read/annotate access, and the candidate (raw
+token, same single-use discipline as the interview/questionnaire flows)
+autosaved editing, sandboxed run requests proxied to sandbox-runner,
+whiteboard strokes, and discussion — candidate writes gated to an ACTIVE
+session. Screen share is a stable public endpoint returning 501 rather than
+a fake success: it needs WebRTC/LiveKit infrastructure this compose stack
+doesn't run, same mock-now/hardened-at-deployment precedent as the STT/TTS
+backends (ADR-017), not a new deferral pattern.
+
+`apps/web-candidate` gained a Workspace tab in the interview HUD (code
+editor with autosave + run + output, a canvas whiteboard, a discussion
+thread) and `apps/web-recruiter` gained a Sessions list and an Interview
+Session detail page (transcript, task creation, a live polled read-only
+view of the candidate's code and run history, a bidirectional whiteboard,
+discussion).
+
+**Verification**: `test_integration_workspace.py` drives task creation →
+candidate autosave → sandboxed run → staff sees the result, whiteboard
+strokes from both sides render together, discussion round-trips both ways,
+cross-org staff access 404s, and candidate writes reject with 409 once the
+session is terminal — against the live stack including a real
+sandbox-runner container. `services/sandbox-runner`'s own unit tests prove
+the isolation directly rather than assuming it: a timeout kills an infinite
+loop, RLIMIT_AS stops an unbounded allocation, and a real socket connect
+attempt from inside the sandbox is confirmed blocked by the network
+namespace (`test_network_is_isolated`). All quality gates green
+(ruff/black/mypy --strict/bandit/pytest) on both `apps/api` and the new
+`services/sandbox-runner`; a `sandbox-quality` CI job mirrors
+`gateway-quality`.
+
+**A security review run against this diff before M9 was called done found a real
+isolation gap**: the first cut setuid-dropped every execution into the *same* fixed
+sandbox account, so the "ephemeral per-run temp directory" claim didn't actually hold
+under concurrency — any run's code could list the world-listable base-image `/tmp`, find
+another live run's directory (owned by the identical shared uid), and read or overwrite
+it; the shared uid also let concurrent runs see and signal each other via `/proc`. Fixed
+via a per-run `UidPool` (never shared, acquired/released around each execution, blocking
+rather than reusing a uid if the pool is briefly exhausted) plus PID-namespace isolation
+(`unshare --pid --fork`) — see ADR-020, and
+`test_pid_namespace_hides_other_processes`/`test_uid_pool_never_hands_out_the_same_uid_twice_concurrently`
+for the tests that prove it rather than assume it.
+
+Deferred within M9 (tracked): a real-time collaborative editor — autosave +
+poll (same shape as M6's questionnaire autosave), not live keystroke
+sync via CRDT/OT; the screen share backend itself (ADR-019); a hardened
+sandbox runtime (M12).
+
+## RAG FAQ and evaluation engine (`services/ai-gateway`, `apps/api`, both web apps) — Milestone 10 (delivered)
+
+`services/ai-gateway` gained a `/v1/embed` endpoint behind an `EmbeddingProvider`
+interface — `MockEmbedder` (deterministic, hash-seeded, L2-normalized 384-dim
+vectors) now, a real sentence-transformer deferred to GPU deployment, same
+mock-now/hardened-later split as the STT/TTS backends (ADR-017). Only the
+embedding *model* is mocked — retrieval is real: `apps/api` migration
+`0010_faq_and_evaluation` adds `faq_documents` with a genuine pgvector
+column and an ivfflat cosine-similarity index, and `routers_faq.py`'s
+candidate-facing `ask_faq` runs an actual `ORDER BY embedding <=> :query`
+search, then feeds only what retrieval found into a new `faq_answer`
+gateway prompt — the LLM can't invent the retrieval step. Staff write FAQ
+documents per requisition; the candidate asks questions from a new FAQ tab
+in the interview Workspace (raw-token discipline, same as every other
+public endpoint).
+
+`evaluation_engine.py` deterministically aggregates resume score,
+questionnaire completion, interview completeness, and coding-task pass
+rate into one weighted verdict — same "arithmetic and thresholds live only
+in application code, never in a prompt" rule `scoring.py` established. The
+gateway-backed `evaluation_summary` narrative is additive-only: if the
+gateway is unreachable when a report is generated, the persisted
+`EvaluationReport` still has its full deterministic verdict and component
+breakdown, just no narrative. `report_export.py` renders PDF (reportlab)
+and Excel (openpyxl) straight from that persisted payload, streamed on
+demand from new staff-only export endpoints — see ADR-021. `apps/web-recruiter`
+gained an Evaluation section on the resume detail page (generate, view,
+download).
+
+**Verification surfaced a real pre-existing bug, fixed forward**:
+screenshot-testing the new Evaluation panel crashed `ResumeDetail.tsx` on
+any resume with a scoring run — `GET .../scoring-runs` never returned
+`checks`/`dimensions`, but the page's "latest run" selector assumed it
+did. Fixed by taking the list's already-newest-first first entry directly.
+Unrelated to M10's own code but blocking its verification, so fixed here
+rather than left for a future milestone to rediscover — same precedent as
+the M8/M9 grants-backfill and sandbox-isolation findings.
+
+`test_integration_faq.py` proves retrieval returns genuinely relevant
+documents and degrades gracefully with zero FAQ documents present;
+`test_integration_evaluation.py` proves every component populates from
+real data, PDF/Excel exports have valid file signatures, and cross-org
+access to a report 404s. `evaluation_engine.py`'s weighting/verdict-banding
+is unit-tested directly. All quality gates green
+(ruff/black/mypy --strict/bandit/pytest) on `apps/api` and
+`services/ai-gateway`.
+
+Deferred within M10: archiving generated reports to MinIO/retention
+(left to M12, as originally scoped — exports are generated on demand and
+streamed, not persisted as artifacts); a real sentence-transformer
+embedding backend (GPU deployment).
 
 ## Questionnaires and candidate invites (`apps/api`) — Milestone 6 (core, delivered)
 
@@ -731,15 +852,19 @@ independent jobs:
 - `api-quality` — ruff, black `--check`, mypy (strict), and bandit against `apps/api`
 - `gateway-quality` — the same checks (ruff, black, mypy strict, bandit, unit
   tests) against `services/ai-gateway`
+- `sandbox-quality` — the same checks against `services/sandbox-runner`, plus
+  installing `nodejs` so the JavaScript executor's unit tests run too
 - `api-tests` — runs the API's offline unit test suite
-- `integration` — boots the full `docker compose` stack, applies migrations,
-  runs `test_integration_readiness.py` against the live services
-  (`AIVA_INTEGRATION=1`), then runs the four domain lifecycle suites
-  (auth/RBAC, resume→scoring roundtrip, questionnaire single-use flow, and
-  interview consent/pre-check/STT-loop) against the live stack including the
-  containerized gateway (`AIVA_AI_GATEWAY_URL=http://localhost:19100` for the
-  interview suite), then runs the golden-set evaluation suite against the live
-  AI gateway before tearing the stack down
+- `integration` — boots the full `docker compose` stack (now including
+  `sandbox-runner`), applies migrations, runs `test_integration_readiness.py`
+  against the live services (`AIVA_INTEGRATION=1`), then runs the seven
+  domain lifecycle suites (auth/RBAC, resume→scoring roundtrip, questionnaire
+  single-use flow, interview consent/pre-check/STT-loop, the M9 workspace,
+  the M10 RAG FAQ, and the M10 evaluation engine) against the live stack
+  including the containerized gateway and sandbox-runner
+  (`AIVA_AI_GATEWAY_URL`/`AIVA_SANDBOX_URL` pointed at their container
+  ports), then runs the golden-set evaluation suite against the live AI
+  gateway before tearing the stack down
 
 ## Architecture decisions (selected)
 
@@ -861,16 +986,18 @@ wired into the compose stack), the candidate-facing self-scheduling UI
 interviewer can be booked into per slot.
 
 Milestone 8 (consent, device pre-check, adaptive STT/TTS interview loop,
-and the live candidate HUD) is now delivered and CI-verified, per above —
-it has moved out of this remaining-work table.
+and the live candidate HUD), Milestone 9 (sandboxed live-coding workspace:
+sandbox-runner, autosaved editor, whiteboard, task discussion), Milestone
+10 (RAG FAQ + cross-signal evaluation engine with PDF/Excel export), and
+Milestone 11 (dashboard, blind screening, scoring-consistency audit,
+tab-focus integrity signals, questionnaire "kits", DSAR export/erasure) are
+now delivered and CI-verified, per above — all four have moved out of this
+remaining-work table.
 
-Remaining milestones and their dependencies:
+Only one milestone remains:
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M9 | Sandbox runner, code editor, whiteboard, screen share, task discussion | M8 |
-| M10 | RAG-based FAQ, evaluation engine, report generation (PDF/Excel export) | M9 |
-| M11 | Dashboard, blind screening, bias audit, integrity signals, DSAR tooling | M10 |
 | M12 | Load testing, penetration-test pass, data-retention jobs, Helm chart | M11 |
 
 Open items carried forward in PLAN.md: local Docker Engine install on the
@@ -912,9 +1039,15 @@ port so they can run side by side. ESLint uses `typescript-eslint`'s type-checke
 recommended config plus custom rules that ban `any` and non-null assertions.
 
 - `apps/web-recruiter` (port 15173): recruiter console — login, pipeline
-  board with scored candidate cards, and the resume detail Evidence Spine
-  (see Milestone 5 section above). Still missing: requisition browsing,
-  job-description/resume upload screens, MFA prompt on login.
+  board with scored candidate cards, the resume detail Evidence Spine
+  (see Milestone 5 section above), (Milestone 9) a Sessions list plus
+  an Interview Session detail page: transcript, coding-task creation, a
+  live polled read-only view of the candidate's code and run history, a
+  bidirectional whiteboard, and discussion, and (Milestone 10) an
+  Evaluation section on the resume detail page — generate, view the
+  component breakdown and narrative, download PDF/Excel. Still missing:
+  requisition browsing, job-description/resume upload screens, MFA prompt
+  on login.
 - `apps/web-candidate` (port 15174): the candidate portal is now a real
   application (Milestone 8): React Router shell with three steps —
   `Join` (token entry, pre-filled from `?token=`), the consent screen, and
@@ -926,9 +1059,14 @@ recommended config plus custom rules that ban `any` and non-null assertions.
   HUD for active sessions: status chips, elapsed timer, topic progress spine,
   question card with gateway-backed read-aloud (`speak` → WAV blob playback),
   typed-text or recorded-audio answering (MediaRecorder → base64 → gateway
-  STT), transcript drawer, and an end-session control. Terminal states render
-  dedicated completed/declined/aborted screens. All traffic flows same-origin
-  through the Vite dev proxy; no external calls.
+  STT), transcript drawer, and an end-session control. An Interview/Workspace
+  tab switch (Milestone 9) sits alongside the Q&A flow — the Workspace tab
+  holds an autosaving code editor with a run button and stdout/stderr/exit-code
+  display, a canvas whiteboard synced with the interviewer, a discussion
+  thread, and (Milestone 10) an FAQ tab answered by retrieval-grounded
+  generation over the recruiter's FAQ documents. Terminal states render
+  dedicated completed/declined/aborted screens. All traffic flows
+  same-origin through the Vite dev proxy; no external calls.
 
   - Loads session state by token on mount and switches on `status` to
     render the right screen: a consent gate (`pending_consent`), the

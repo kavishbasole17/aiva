@@ -7,13 +7,43 @@ Living document. Sections marked **(pending Mx)** are declared gaps, not omissio
 ```bash
 docker compose up -d
 scripts/wait_ready.sh
+docker compose exec api alembic upgrade head
+scripts/seed_demo_account.sh
 ```
 
 `readyz` returns 200 only when Postgres, Redis, and MinIO (including the
-`aiva-artifacts` bucket) are reachable; `wait_ready.sh` polls it until green.
+`aiva-artifacts` bucket) are reachable; `wait_ready.sh` polls it until green —
+it does **not** mean the schema exists yet. A fresh `postgres_data` volume
+starts empty; `alembic upgrade head` must run once against it before any
+endpoint that touches the database will work (otherwise every DB-backed
+request 500s with `UndefinedTableError`). It's idempotent — safe to re-run
+after every `docker compose down --volumes` reset, and CI does the equivalent
+via `.github/workflows/ci.yml`'s `integration` job.
+
 Note: `docker compose up --wait` is deliberately not used — the one-shot
 `minio-init` bucket creator exits 0 on success and `--wait` reports that as a
 failure (see DECISIONS ADR-013).
+
+## Test credentials
+
+`scripts/seed_demo_account.sh` calls `POST /auth/register-org` against the
+dev API to create a fixed demo organization + admin/recruiter account. It is
+idempotent — safe to re-run; a 409 (already exists) is treated as success.
+The same fixed credentials are reused every time so they stay usable across
+resets of the dev database:
+
+| Field | Value |
+|---|---|
+| Web app | `web-recruiter`, http://localhost:15173 |
+| Organization | `AIVA Demo Org` |
+| Email | `demo.recruiter@aiva.test` |
+| Password | `AivaDemo#2026!` |
+
+These are dev-only, never used outside `docker compose` locally, and are not
+secrets — override via `AIVA_DEMO_ORG` / `AIVA_DEMO_EMAIL` /
+`AIVA_DEMO_PASSWORD` env vars if you need a different seed. `apps/web-candidate`
+has no login (token-gated only); a per-interview join link/token is generated
+through the recruiter console instead.
 
 ## Services (dev)
 
@@ -24,6 +54,7 @@ failure (see DECISIONS ADR-013).
 | Redis 7 | 16379 | AOF on |
 | MinIO | 19000 (console 19001) | bucket `aiva-artifacts` |
 | ai-gateway | 19100 | mock LLM/STT/TTS backends; `/media-backends` shows active providers |
+| sandbox-runner | 19200 | live-coding execution; `/runtimes` shows supported languages |
 | web-recruiter dev | 15173 | `pnpm dev` in `apps/web-recruiter` |
 | web-candidate dev | 15174 | `pnpm dev` in `apps/web-candidate` |
 

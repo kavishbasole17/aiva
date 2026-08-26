@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.backends import Backend, GenerationResult, PromptRegistry, build_backend
 from app.contracts import get_response_model
+from app.embeddings import MAX_EMBED_CHARS, EmbeddingProvider, build_embedder
 from app.logging_setup import configure_logging
 from app.media import (
     MAX_SYNTH_CHARS,
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.stt = build_transcriber(settings.stt_backend, settings.stt_model)
     app.state.tts = build_speaker(settings.tts_backend, settings.tts_voice)
+    app.state.embedder = build_embedder(settings.embed_backend, settings.embed_model)
     prompts_dir = Path(settings.prompts_dir) if settings.prompts_dir else None
     app.state.prompts = PromptRegistry(prompts_dir)
     yield
@@ -74,6 +76,10 @@ class TtsRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_SYNTH_CHARS)
 
 
+class EmbedRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_EMBED_CHARS)
+
+
 router = APIRouter()
 
 
@@ -93,9 +99,11 @@ async def list_prompts(request: Request) -> dict[str, object]:
 async def media_backends(request: Request) -> dict[str, object]:
     stt: TranscriptionProvider = request.app.state.stt
     tts: SpeechProvider = request.app.state.tts
+    embedder: EmbeddingProvider = request.app.state.embedder
     return {
         "stt": {"provider": type(stt).__name__, "model_id": stt.model_id},
         "tts": {"provider": type(tts).__name__, "model_id": tts.model_id},
+        "embed": {"provider": type(embedder).__name__, "model_id": embedder.model_id},
     }
 
 
@@ -114,6 +122,13 @@ async def stt(body: SttRequest, request: Request) -> dict[str, object]:
 async def tts(body: TtsRequest, request: Request) -> dict[str, object]:
     speaker: SpeechProvider = request.app.state.tts
     result = await speaker.synthesize(body.text)
+    return result.model_dump()
+
+
+@router.post("/v1/embed")
+async def embed(body: EmbedRequest, request: Request) -> dict[str, object]:
+    embedder: EmbeddingProvider = request.app.state.embedder
+    result = await embedder.embed(body.text)
     return result.model_dump()
 
 

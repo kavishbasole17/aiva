@@ -48,6 +48,55 @@ export interface TurnResult {
   completed: boolean;
 }
 
+export interface CodingTask {
+  id: string;
+  title: string;
+  prompt: string;
+  starter_code: string;
+  language: string;
+  created_at: string;
+}
+
+export interface ExecutionResult {
+  id: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  timed_out: boolean;
+  truncated: boolean;
+  duration_ms: number;
+  created_at: string;
+}
+
+export interface StrokePayload {
+  points: Array<[number, number]>;
+  color: string;
+  width: number;
+}
+
+export interface WhiteboardStroke {
+  id: string;
+  author: "candidate" | "interviewer";
+  stroke_payload: StrokePayload;
+  created_at: string;
+}
+
+export interface DiscussionMessage {
+  id: string;
+  task_id: string | null;
+  author: "candidate" | "interviewer";
+  author_label: string;
+  body: string;
+  created_at: string;
+}
+
+export interface FaqAnswer {
+  answer: string;
+  confidence: number;
+  cited_document_ids: string[];
+  retrieved: Array<{ id: string; title: string }>;
+}
+
 export interface Synthesis {
   audio_b64: string;
   format: string;
@@ -135,6 +184,74 @@ export function finishInterview(token: string): Promise<{ status: string }> {
 
 export function speak(token: string, text: string): Promise<Synthesis> {
   return postJson(`/public/interview-sessions/${encodeURIComponent(token)}/tts`, { text });
+}
+
+export function listTasks(token: string): Promise<{ tasks: CodingTask[] }> {
+  return request(`/public/interview-sessions/${encodeURIComponent(token)}/coding-tasks`);
+}
+
+export function getCode(token: string, taskId: string): Promise<{ source: string }> {
+  return request(
+    `/public/interview-sessions/${encodeURIComponent(token)}/coding-tasks/${taskId}/code`,
+  );
+}
+
+export function saveCode(
+  token: string,
+  taskId: string,
+  source: string,
+): Promise<{ saved_at: string }> {
+  return postJson(
+    `/public/interview-sessions/${encodeURIComponent(token)}/coding-tasks/${taskId}/code`,
+    { source },
+  );
+}
+
+export function runCode(
+  token: string,
+  taskId: string,
+  source: string,
+  stdin = "",
+): Promise<ExecutionResult> {
+  return postJson(
+    `/public/interview-sessions/${encodeURIComponent(token)}/coding-tasks/${taskId}/run`,
+    { source, stdin },
+  );
+}
+
+export function listWhiteboard(token: string): Promise<{ strokes: WhiteboardStroke[] }> {
+  return request(`/public/interview-sessions/${encodeURIComponent(token)}/whiteboard`);
+}
+
+export function addStroke(
+  token: string,
+  strokePayload: StrokePayload,
+): Promise<WhiteboardStroke> {
+  return postJson(`/public/interview-sessions/${encodeURIComponent(token)}/whiteboard`, {
+    stroke_payload: strokePayload,
+  });
+}
+
+export function listDiscussion(token: string): Promise<{ messages: DiscussionMessage[] }> {
+  return request(`/public/interview-sessions/${encodeURIComponent(token)}/discussion`);
+}
+
+export function postDiscussion(token: string, body: string): Promise<DiscussionMessage> {
+  return postJson(`/public/interview-sessions/${encodeURIComponent(token)}/discussion`, { body });
+}
+
+export function askFaq(token: string, question: string): Promise<FaqAnswer> {
+  return postJson(`/public/interview-sessions/${encodeURIComponent(token)}/faq`, { question });
+}
+
+export function reportIntegritySignal(
+  token: string,
+  signalType: "tab_blur" | "tab_focus" | "visibility_hidden" | "visibility_visible",
+): Promise<void> {
+  return postJson(`/public/interview-sessions/${encodeURIComponent(token)}/integrity-signals`, {
+    signal_type: signalType,
+    detail: {},
+  });
 }
 
 export async function healthLatencyMs(): Promise<number> {

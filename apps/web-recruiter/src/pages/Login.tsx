@@ -37,42 +37,50 @@ export function LoginPage() {
 
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--abyss)] px-6 text-[var(--mist)]">
-      <Card className="w-full max-w-sm">
-        <h1 className="display mb-1 text-xl font-semibold">AIVA Recruiter Console</h1>
-        <p className="mb-6 text-xs text-[var(--haze)]">
-          MFA-protected accounts will be prompted for a code in a later milestone.
-        </p>
-        <form
-            onSubmit={(event) => {
-              void submit(event);
-            }}
-            className="flex flex-col gap-4"
-          >
-          <Field label="Work email" htmlFor="email">
-            <Input
-              id="email"
-              type="email"
-              autoComplete="username"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </Field>
-          <Field label="Password" htmlFor="password" error={error ?? undefined}>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </Field>
-          <Button type="submit" disabled={busy}>
-            {busy ? "Signing in…" : "Sign in"}
-          </Button>
-        </form>
-      </Card>
+      <div className="w-full max-w-sm">
+        <div className="mb-8 text-center">
+          <span className="display text-2xl font-bold tracking-tight text-[var(--signal)]">
+            AIVA
+          </span>
+          <p className="mt-2 text-sm text-[var(--haze)]">Practical AI for hiring teams.</p>
+        </div>
+        <Card>
+          <h1 className="display mb-1 text-xl font-semibold">Sign in to the console</h1>
+          <p className="mb-6 text-xs text-[var(--haze)]">
+            MFA-protected accounts will be prompted for a code in a later milestone.
+          </p>
+          <form
+              onSubmit={(event) => {
+                void submit(event);
+              }}
+              className="flex flex-col gap-4"
+            >
+            <Field label="Work email" htmlFor="email">
+              <Input
+                id="email"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </Field>
+            <Field label="Password" htmlFor="password" error={error ?? undefined}>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </Field>
+            <Button type="submit" disabled={busy} arrow className="mt-2 w-full">
+              {busy ? "Signing in…" : "Sign in"}
+            </Button>
+          </form>
+        </Card>
+      </div>
     </main>
   );
 }

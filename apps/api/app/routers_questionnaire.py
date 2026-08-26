@@ -98,6 +98,54 @@ async def create_questionnaire(
     return {"id": str(questionnaire.id), "question_count": len(body.questions)}
 
 
+class QuestionnaireClone(BaseModel):
+    target_requisition_id: uuid.UUID
+
+
+@router.post("/questionnaires/{questionnaire_id}/clone", status_code=201)
+async def clone_questionnaire(
+    questionnaire_id: uuid.UUID,
+    body: QuestionnaireClone,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*EDIT_ROLES)),
+) -> dict[str, object]:
+    """M11 'interview kits': reuse a proven questionnaire on a new
+    requisition instead of rebuilding it by hand. Scoped to questionnaires
+    only — coding tasks are session-scoped in this schema (M9), not
+    requisition-scoped, so a reusable coding-task library would need a new
+    template entity; left for a future pass rather than half-built here."""
+    source = (
+        await db.execute(select(Questionnaire).where(Questionnaire.id == questionnaire_id))
+    ).scalar_one_or_none()
+    if source is None or source.organization_id != user.organization_id:
+        raise HTTPException(status_code=404, detail="Questionnaire not found")
+    await _load_requisition(db, user, body.target_requisition_id)
+
+    clone = Questionnaire(
+        organization_id=user.organization_id,
+        requisition_id=body.target_requisition_id,
+        title=source.title,
+        questions=source.questions,
+    )
+    db.add(clone)
+    await db.flush()
+    await record_event(
+        db,
+        action="questionnaire.cloned",
+        entity_type="questionnaire",
+        entity_id=clone.id,
+        actor_id=user.id,
+        organization_id=user.organization_id,
+        payload={"source_questionnaire_id": str(source.id)},
+    )
+    return {
+        "id": str(clone.id),
+        "title": clone.title,
+        "question_count": len(clone.questions),
+        "requisition_id": str(body.target_requisition_id),
+    }
+
+
 @router.post("/questionnaires/{questionnaire_id}/invites", status_code=201)
 async def create_invite(
     questionnaire_id: uuid.UUID,

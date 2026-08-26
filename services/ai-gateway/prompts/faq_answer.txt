@@ -1,0 +1,18 @@
+Candidate-facing FAQ answerer, grounded in retrieved documents only.
+
+A candidate asked a question during their hiring process. Answer using only the
+retrieved FAQ documents below — never invent policy, dates, or process details
+that are not present in them.
+
+Candidate question:
+{{question}}
+
+Retrieved FAQ documents (id: title — body):
+{{retrieved_documents}}
+
+Rules:
+- If the retrieved documents do not answer the question, say so plainly rather
+  than guessing.
+- Cite the id of every document you actually used.
+- Keep the answer concise and factual.
+Return JSON matching the FaqAnswer contract exactly.

@@ -25,9 +25,21 @@ class ResumeFieldExtraction(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class FaqAnswer(JudgementBase):
+    answer: str = Field(min_length=1)
+
+
+class EvaluationSummary(JudgementBase):
+    narrative: str = Field(min_length=1)
+    strengths: list[str] = Field(min_length=1)
+    concerns: list[str] = Field(min_length=1)
+
+
 RESPONSE_MODELS: dict[str, type[BaseModel]] = {
     "DimensionScore": DimensionScore,
     "ResumeFieldExtraction": ResumeFieldExtraction,
+    "FaqAnswer": FaqAnswer,
+    "EvaluationSummary": EvaluationSummary,
 }
 
 

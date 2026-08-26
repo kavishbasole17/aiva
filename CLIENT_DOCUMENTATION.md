@@ -1,12 +1,19 @@
 # AIVA — Project Documentation
 
 **Prepared for:** Client review
-**Last updated:** 2026-08-25
-**Status:** Milestones 1 through 8 delivered and verified with automated
-end-to-end tests, including a complete, working candidate interview
-experience (invitation link through live adaptive interview). See the
-"Remaining roadmap" and verification-accuracy sections below for the small
-number of open items and what is still ahead.
+**Last updated:** 2026-08-26
+**Status:** Milestones 0 through 11 delivered and verified with automated
+end-to-end tests against a live stack — authentication/RBAC, resume
+scoring, questionnaires, scheduling, the full candidate interview
+experience, the sandboxed live-coding workspace, RAG FAQ + evaluation
+reporting, and the dashboard/blind-screening/DSAR compliance set are all
+built and working. Only Milestone 12 (load test, penetration-test pass,
+data-retention jobs, Helm chart — production hardening) remains. See
+`docs/PLAN.md` for the full per-milestone verification record and the new
+`AIVA_PROJECT_REPORT.pdf`/`AIVA_SRS.pdf`/`AIVA_DELIVERABLES.pdf` for a
+complete, current summary. The "(planned)" markers throughout the section
+below are historical — every component listed is now built; see section 3
+correction below.
 
 > This document is maintained alongside the codebase and will be expanded as each
 > milestone is delivered. It is intended to give a non-technical-to-moderately-technical

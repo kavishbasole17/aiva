@@ -7,21 +7,23 @@ export function cn(...parts: Array<string | false | null | undefined>): string {
 
 type ButtonVariant = "primary" | "action" | "ghost" | "danger";
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant;
-}
-
 const buttonStyles: Record<ButtonVariant, string> = {
   primary:
-    "bg-[var(--signal)] text-white hover:bg-[var(--signal-text)] focus-visible:outline-[var(--signal-text)]",
-  action: "bg-[var(--ember)] text-white hover:brightness-110 focus-visible:outline-[var(--ember)]",
+    "bg-[var(--signal)] text-white shadow-sm hover:bg-[var(--signal-text)] focus-visible:outline-[var(--signal-text)]",
+  action: "bg-[var(--ember)] text-white shadow-sm hover:brightness-110 focus-visible:outline-[var(--ember)]",
   ghost:
-    "bg-transparent text-[var(--mist)] border border-[var(--steel)] hover:border-[var(--signal)] focus-visible:outline-[var(--signal)]",
+    "bg-transparent text-[var(--mist)] border border-[var(--steel)] hover:border-[var(--signal)] hover:text-[var(--signal-text)] focus-visible:outline-[var(--signal)]",
   danger: "bg-transparent text-[var(--danger)] border border-[var(--danger)] hover:bg-[color-mix(in_srgb,var(--danger)_15%,transparent)] focus-visible:outline-[var(--danger)]",
 };
 
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;
+  /** Trailing arrow affordance, e.g. Atigro-style feature-card CTAs. */
+  arrow?: boolean;
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = "primary", className, type = "button", ...rest },
+  { variant = "primary", arrow = false, className, type = "button", children, ...rest },
   ref,
 ) {
   return (
@@ -29,15 +31,25 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type={type}
       className={cn(
-        "inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-md)] px-4",
-        "font-medium transition-colors duration-[var(--dur-quick)]",
+        "group inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-md)] px-4",
+        "font-semibold transition-colors duration-[var(--dur-quick)]",
         "focus-visible:outline-2 focus-visible:outline-offset-2",
         "disabled:pointer-events-none disabled:opacity-50",
         buttonStyles[variant],
         className,
       )}
       {...rest}
-    />
+    >
+      {children}
+      {arrow ? (
+        <span
+          aria-hidden="true"
+          className="transition-transform duration-[var(--dur-quick)] group-hover:translate-x-0.5"
+        >
+          →
+        </span>
+      ) : null}
+    </button>
   );
 });
 
@@ -52,7 +64,10 @@ interface FieldProps {
 export function Field({ label, hint, error, children, htmlFor }: FieldProps) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-[var(--mist)]">
+      <label
+        htmlFor={htmlFor}
+        className="text-xs font-semibold uppercase tracking-wide text-[var(--haze)]"
+      >
         {label}
       </label>
       {children}
@@ -96,9 +111,9 @@ export function Card({ children, className, interactive = false }: CardProps) {
   return (
     <div
       className={cn(
-        "rounded-[var(--radius-lg)] border border-[var(--steel)] bg-[var(--hull)] p-6",
+        "rounded-[var(--radius-lg)] border border-[var(--steel)] bg-[var(--hull)] p-6 shadow-sm",
         interactive &&
-          "cursor-pointer transition-colors duration-[var(--dur-quick)] hover:border-[var(--signal)] focus-within:border-[var(--signal)]",
+          "cursor-pointer transition-all duration-[var(--dur-quick)] hover:-translate-y-0.5 hover:border-[var(--signal)] hover:shadow-md focus-within:border-[var(--signal)]",
         className,
       )}
     >

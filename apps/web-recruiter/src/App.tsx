@@ -1,20 +1,52 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { Button } from "@aiva/ui";
+import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { Button, useTheme } from "@aiva/ui";
 import { useAuth, signOut } from "./auth";
 import { LoginPage } from "./pages/Login";
 import { CandidatesPage } from "./pages/Candidates";
 import { ResumeDetailPage } from "./pages/ResumeDetail";
+import { SessionsPage } from "./pages/Sessions";
+import { InterviewSessionDetailPage } from "./pages/InterviewSessionDetail";
+import { DashboardPage } from "./pages/Dashboard";
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <Button
+      variant="ghost"
+      onClick={toggle}
+      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+    >
+      {theme === "dark" ? "Light" : "Dark"} theme
+    </Button>
+  );
+}
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[var(--abyss)] text-[var(--mist)]">
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--steel)] bg-[var(--hull)] px-6 py-3">
-        <span className="display text-base font-bold tracking-widest text-[var(--signal-text)]">
-          AIVA
-        </span>
-        <Button variant="ghost" onClick={signOut}>
-          Sign out
-        </Button>
+      <header className="sticky top-0 z-10 border-b border-[var(--steel)] bg-[var(--hull)]">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-4">
+            <span className="display text-lg font-bold tracking-tight text-[var(--signal)]">
+              AIVA
+            </span>
+            <span className="hidden text-xs font-medium uppercase tracking-wide text-[var(--haze)] sm:inline">
+              Recruiter Console
+            </span>
+            <Link
+              to="/dashboard"
+              className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
+            >
+              Dashboard
+            </Link>
+          </div>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Button variant="ghost" onClick={signOut}>
+              Sign out
+            </Button>
+          </div>
+        </div>
       </header>
       {children}
     </div>
@@ -35,6 +67,14 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
+          path="/dashboard"
+          element={
+            <Protected>
+              <DashboardPage />
+            </Protected>
+          }
+        />
+        <Route
           path="/pipeline"
           element={
             <Protected>
@@ -47,6 +87,22 @@ export default function App() {
           element={
             <Protected>
               <ResumeDetailPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/sessions"
+          element={
+            <Protected>
+              <SessionsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/interview-sessions/:id"
+          element={
+            <Protected>
+              <InterviewSessionDetailPage />
             </Protected>
           }
         />

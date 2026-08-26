@@ -5,6 +5,7 @@ import {
   ApiError,
   finishInterview,
   getSessionState,
+  reportIntegritySignal,
   speak,
   startInterview,
   submitConsent,
@@ -15,6 +16,7 @@ import {
 import type { PreCheckReport, Question, SessionState } from "../api";
 import { base64ToBlobUrl, blobToBase64 } from "../audio";
 import PreCheckGate from "./PreCheck";
+import { WorkspacePanel } from "./Workspace";
 
 interface TranscriptEntry {
   questionText: string;
@@ -238,6 +240,7 @@ function Hud({
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [view, setView] = useState<"interview" | "workspace">("interview");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -248,6 +251,29 @@ function Hud({
   }, []);
 
   useEffect(() => () => recorderRef.current?.stream.getTracks().forEach((t) => t.stop()), []);
+
+  // Real signal, zero ML dependency: the browser already knows when the
+  // candidate leaves the tab. Face/gaze-based proctoring stays deferred to
+  // GPU deployment (ADR-023) — this doesn't try to approximate it.
+  useEffect(() => {
+    function onBlur(): void {
+      void reportIntegritySignal(token, "tab_blur");
+    }
+    function onFocus(): void {
+      void reportIntegritySignal(token, "tab_focus");
+    }
+    function onVisibility(): void {
+      void reportIntegritySignal(token, document.hidden ? "visibility_hidden" : "visibility_visible");
+    }
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [token]);
 
   async function begin(): Promise<void> {
     setBusy(true);
@@ -403,74 +429,99 @@ function Hud({
         ))}
       </ol>
 
-      {question ? (
-        <>
-          <Card interactive={false}>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <Badge tone={question.kind === "probe" ? "warning" : "accent"}>
-                  {question.kind === "probe" ? "Follow-up" : "Question"}
-                </Badge>
-                <p className="mt-3 whitespace-pre-line text-lg leading-relaxed">{question.text}</p>
+      <div className="flex gap-2 border-b border-[var(--steel)] pb-2">
+        {(["interview", "workspace"] as const).map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            onClick={() => setView(candidate)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+              view === candidate
+                ? "bg-[var(--signal)] text-white"
+                : "text-[var(--haze)] hover:text-[var(--mist)]"
+            }`}
+          >
+            {candidate}
+          </button>
+        ))}
+      </div>
+
+      {view === "workspace" && <WorkspacePanel token={token} />}
+
+      {view === "interview" &&
+        (question ? (
+          <>
+            <Card interactive={false}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <Badge tone={question.kind === "probe" ? "warning" : "accent"}>
+                    {question.kind === "probe" ? "Follow-up" : "Question"}
+                  </Badge>
+                  <p className="mt-3 whitespace-pre-line text-lg leading-relaxed">
+                    {question.text}
+                  </p>
+                </div>
+                <Button variant="ghost" onClick={() => void playTts(question.tts_text)}>
+                  Read aloud
+                </Button>
               </div>
-              <Button variant="ghost" onClick={() => void playTts(question.tts_text)}>
-                Read aloud
+            </Card>
+
+            <Card interactive={false}>
+              <textarea
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                rows={4}
+                placeholder="Type your answer, or record it instead…"
+                className="w-full resize-y rounded-md border border-[var(--steel)] bg-[var(--abyss)] p-3 leading-relaxed outline-none focus:border-[var(--signal)]"
+              />
+              {error && (
+                <p role="alert" className="mt-2 text-sm text-[var(--danger, #e5484d)]">
+                  {error}
+                </p>
+              )}
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant={recording ? "danger" : "action"}
+                  onClick={recording ? stopRecording : startRecording}
+                >
+                  {recording ? "Stop & send recording" : "Record answer"}
+                </Button>
+                <Button disabled={busy || !answer.trim()} onClick={() => void sendText()}>
+                  Send answer
+                </Button>
+              </div>
+            </Card>
+
+            <details className="rounded-lg border border-[var(--steel)] p-4 text-sm">
+              <summary className="cursor-pointer text-[var(--haze)]">
+                Your answers so far ({transcript.length})
+              </summary>
+              <ul className="mt-3 flex flex-col gap-2">
+                {transcript.map((entry, index) => (
+                  <li key={index} className="flex gap-2">
+                    <span className="font-mono text-[var(--haze)]">{index + 1}.</span>
+                    <span>
+                      {entry.answerText}{" "}
+                      {entry.viaAudio && <em className="text-[var(--haze)]">(transcribed)</em>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </>
+        ) : (
+          <Card>
+            <p className="leading-relaxed">
+              Everything is ready. When you press start, the interviewer asks its first question.
+            </p>
+            <div className="mt-4">
+              <Button disabled={busy} onClick={() => void begin()}>
+                Start interview
               </Button>
             </div>
           </Card>
-
-          <Card interactive={false}>
-            <textarea
-              value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
-              rows={4}
-              placeholder="Type your answer, or record it instead…"
-              className="w-full resize-y rounded-md border border-[var(--steel)] bg-[var(--abyss)] p-3 leading-relaxed outline-none focus:border-[var(--signal)]"
-            />
-            {error && (
-              <p role="alert" className="mt-2 text-sm text-[var(--danger, #e5484d)]">
-                {error}
-              </p>
-            )}
-            <div className="mt-4 flex items-center justify-between">
-              <Button variant={recording ? "danger" : "action"} onClick={recording ? stopRecording : startRecording}>
-                {recording ? "Stop & send recording" : "Record answer"}
-              </Button>
-              <Button disabled={busy || !answer.trim()} onClick={() => void sendText()}>
-                Send answer
-              </Button>
-            </div>
-          </Card>
-
-          <details className="rounded-lg border border-[var(--steel)] p-4 text-sm">
-            <summary className="cursor-pointer text-[var(--haze)]">
-              Your answers so far ({transcript.length})
-            </summary>
-            <ul className="mt-3 flex flex-col gap-2">
-              {transcript.map((entry, index) => (
-                <li key={index} className="flex gap-2">
-                  <span className="font-mono text-[var(--haze)]">{index + 1}.</span>
-                  <span>
-                    {entry.answerText}{" "}
-                    {entry.viaAudio && <em className="text-[var(--haze)]">(transcribed)</em>}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        </>
-      ) : (
-        <Card>
-          <p className="leading-relaxed">
-            Everything is ready. When you press start, the interviewer asks its first question.
-          </p>
-          <div className="mt-4">
-            <Button disabled={busy} onClick={() => void begin()}>
-              Start interview
-            </Button>
-          </div>
-        </Card>
-      )}
+        ))}
 
       <footer className="fixed inset-x-0 bottom-0 border-t border-[var(--steel)] bg-[var(--hull)] px-6 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-3xl items-center justify-between">

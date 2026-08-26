@@ -31,6 +31,7 @@ from app.scoring import (
     technical_dimension_from_checks,
     validate_profile,
 )
+from app.scoring_audit import ScoringRunFacts, run_audit
 from app.settings import Settings
 from app.text_extract import DocumentText, load_document_text
 from app.text_extract import extract_fields as extract_document_fields
@@ -207,9 +208,18 @@ async def upload_resume(
     return {"id": str(doc_row.id), "field_count": len(fields), "page_count": len(document.pages)}
 
 
+#: Field names whose *value* identifies the candidate (name/contact info),
+#: as opposed to fields that carry the actual signal a blind first pass is
+#: meant to focus reviewers on (skills, years, education, etc). Blind mode
+#: redacts only these — same names DSAR erasure treats as PII (routers_dsar.py).
+BLIND_SCREENING_FIELD_NAMES = frozenset({"email", "phone", "name", "full_name", "linkedin"})
+BLIND_REDACTION_MARKER = "•••• hidden for blind screening ••••"
+
+
 @router.get("/resumes/{resume_id}")
 async def get_resume(
     resume_id: uuid.UUID,
+    blind: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> dict[str, object]:
@@ -231,18 +241,27 @@ async def get_resume(
     )
     return {
         "id": str(doc.id),
-        "filename": doc.filename,
+        "filename": BLIND_REDACTION_MARKER if blind else doc.filename,
         "page_count": doc.page_count,
-        "candidate_email": doc.candidate_email,
+        "candidate_email": BLIND_REDACTION_MARKER if blind else doc.candidate_email,
+        "blind": blind,
         "fields": [
             {
                 "field_name": row.field_name,
-                "value": row.value,
+                "value": (
+                    BLIND_REDACTION_MARKER
+                    if blind and row.field_name in BLIND_SCREENING_FIELD_NAMES
+                    else row.value
+                ),
                 "confidence": row.confidence,
                 "page_number": row.page_number,
                 "start_offset": row.start_offset,
                 "end_offset": row.end_offset,
-                "source_quote": row.source_quote,
+                "source_quote": (
+                    BLIND_REDACTION_MARKER
+                    if blind and row.field_name in BLIND_SCREENING_FIELD_NAMES
+                    else row.source_quote
+                ),
                 "extractor": row.extractor,
             }
             for row in rows
@@ -479,6 +498,7 @@ def _summarize_run(run: ScoringRunRow | None) -> dict[str, object] | None:
 @router.get("/requisitions/{requisition_id}/candidates")
 async def list_candidates(
     requisition_id: uuid.UUID,
+    blind: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> dict[str, object]:
@@ -515,13 +535,14 @@ async def list_candidates(
         "candidates": [
             {
                 "resume_id": str(doc.id),
-                "filename": doc.filename,
-                "candidate_email": doc.candidate_email,
+                "filename": (BLIND_REDACTION_MARKER if blind else doc.filename),
+                "candidate_email": (None if blind else doc.candidate_email),
                 "created_at": doc.created_at.isoformat(),
                 "latest_run": _summarize_run(latest_by_resume.get(str(doc.id))),
             }
             for doc in docs
-        ]
+        ],
+        "blind": blind,
     }
 
 
@@ -555,4 +576,50 @@ async def list_scoring_runs(
             }
             for r in runs
         ]
+    }
+
+
+@router.get("/requisitions/{requisition_id}/scoring-audit")
+async def get_scoring_audit(
+    requisition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    """Deterministic scoring-consistency audit — see scoring_audit.py's
+    module docstring for why this is scoped to consistency checks rather
+    than a demographic disparate-impact analysis (ADR-023)."""
+    await _load_requisition(db, user, requisition_id)
+    rows = (
+        (
+            await db.execute(
+                select(ScoringRunRow).where(ScoringRunRow.requisition_id == requisition_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    facts = [
+        ScoringRunFacts(
+            resume_id=str(r.resume_id),
+            weight_profile_id=str(r.weight_profile_id),
+            total_score=r.total_score,
+            verdict=r.verdict,
+            run_fingerprint=r.run_fingerprint,
+            dimensions_payload=r.dimensions_payload,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+    findings = run_audit(facts)
+    return {
+        "runs_analyzed": len(facts),
+        "findings": [
+            {
+                "kind": f.kind,
+                "severity": f.severity,
+                "detail": f.detail,
+                "resume_ids": f.resume_ids,
+            }
+            for f in findings
+        ],
     }

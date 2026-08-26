@@ -20,8 +20,8 @@
   --space-12: 3rem;
 
   --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
   --radius-full: 9999px;
 
   --border-hairline: 1px;
@@ -50,20 +50,22 @@
   --success: #57ab5a;
 }
 
+/* Light theme: default. Deep-navy-on-white, generous whitespace, understated
+   accents — the corporate-B2B language the recruiter/candidate apps share. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --abyss: #f5f8fb;
+  --abyss: #f6f8fb;
   --hull: #ffffff;
-  --steel: #d7e1ec;
-  --signal: #046bb3;
-  --signal-text: #045a97;
-  --signal-dim: #b3d4ee;
-  --ember: #c4540f;
-  --mist: #0b1a2b;
-  --haze: #52667e;
-  --danger: #c93c37;
-  --warning: #9d6700;
-  --success: #2da44e;
+  --steel: #dfe6ef;
+  --signal: #0a2f5c;
+  --signal-text: #123a6b;
+  --signal-dim: #dbe6f2;
+  --ember: #b3540f;
+  --mist: #0c1c2e;
+  --haze: #556980;
+  --danger: #b3261e;
+  --warning: #8a5a00;
+  --success: #1e7a3d;
 }
 
 @media (prefers-reduced-motion: reduce) {

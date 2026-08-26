@@ -12,6 +12,9 @@ export default function Join() {
 
   return (
     <main className="mx-auto flex max-w-2xl flex-col gap-8 px-6 py-12">
+      <div className="text-center">
+        <span className="display text-xl font-bold tracking-tight text-[var(--signal)]">AIVA</span>
+      </div>
       <PageStagger>
         <Card>
           <p className="text-sm uppercase tracking-widest text-[var(--haze)]">Step 1 of 3</p>
@@ -37,7 +40,7 @@ export default function Join() {
                 autoFocus
               />
             </Field>
-            <Button type="submit" disabled={trimmed.length === 0}>
+            <Button type="submit" disabled={trimmed.length === 0} arrow>
               Begin equipment check
             </Button>
           </form>
