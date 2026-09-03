@@ -321,8 +321,21 @@ milestone was called done (ADR-022). All quality gates green
 
 ## Known open items carried forward
 
-- Local Docker Engine install in WSL pending operator action; compose stack is
-  proven via CI integration job meanwhile.
+- Docker Desktop (Windows host, WSL2 backend) is available and the full compose
+  stack now runs and has been verified end to end against it (fresh volumes,
+  full migration chain 0001→0013, `wait_ready.sh`, and the domain-lifecycle
+  integration suite: auth/resume/questionnaire/interview/faq/m11 all pass —
+  25/28 tests, zero rate-limit false-positives). Two `test_integration_workspace.py`/
+  `test_integration_evaluation.py` cases failed with empty stdout / nonzero exit
+  from `sandbox-runner`'s code execution specifically under this Docker
+  Desktop/WSL2 setup — `POST /v1/execute` returns 200 but the sandboxed process
+  produces no output, most likely a Linux namespace/`unshare` behavior
+  difference between Docker Desktop's virtualized backend and a native Linux
+  host (this repo's own CI runs on `ubuntu-latest`, a native Linux kernel).
+  Not caused by anything changed in this pass (nothing in `services/sandbox-runner`,
+  `routers_workspace.py`, or `evaluation_engine.py` was touched) and unconfirmed
+  as a root cause — needs re-verification on native Linux (i.e. real CI) before
+  treating it as anything more than an environment-specific observation.
 - Coverage thresholds and golden-set content begin at M4 when scoring logic exists.
 - MinIO server-side encryption wires into KES/Vault at production hardening (ADR-008).
 
