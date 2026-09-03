@@ -1,7 +1,11 @@
 # AIVA
 
-Air-gapped AI candidate evaluation and interview automation. On-premise, zero external
-runtime network calls, every model served locally.
+AI candidate evaluation and interview automation, built on FastAPI + React. AI
+judgement (resume scoring, questionnaire evaluation, interview question
+generation, evaluation reports) runs on the real Anthropic Claude API via a
+single internal gateway (`services/ai-gateway`) — no self-hosted model, no GPU
+to operate. See ADR-024 for why the earlier plan (a hand-rolled local/self-hosted
+LLM serving layer) was dropped in favor of this.
 
 ## Status
 
@@ -22,10 +26,12 @@ are all built and working end to end against a live stack. Only Milestone
 12 (load test, pen-test pass, retention jobs, Helm chart — production
 hardening) has not started. Governance docs:
 `docs/PLAN.md` (build order and verification evidence), `docs/DECISIONS.md`
-(architecture decision records), `docs/RUNBOOK.md` (day-2 operations), and
-`docs/MODEL_CARD.md` (AI model inventory — still mostly empty since no real
-model is deployed yet; everything runs on deterministic mocks pending GPU
-hardware).
+(architecture decision records, including ADR-024 — the switch to the
+Anthropic API and the branding rebrand away from an earlier reference site),
+`docs/RUNBOOK.md` (day-2 operations), and `docs/MODEL_CARD.md` (AI model
+inventory — LLM reasoning now runs on the real Anthropic API when configured;
+embeddings/STT/TTS remain deterministic mocks pending a local-model
+deployment, since Anthropic has no embedding or speech API).
 
 ## Repository layout
 
@@ -745,13 +751,12 @@ rather than silently returning garbage.
 complete, working API, testable directly, but not yet reachable through
 either web app's UI.
 
-## AI gateway (`services/ai-gateway`) — Milestone 3
+## AI gateway (`services/ai-gateway`) — Milestone 3 (real backend: Anthropic API, ADR-024)
 
 A standalone FastAPI service (own `pyproject.toml`, same quality tooling as
 `apps/api`: ruff, black, mypy strict, bandit, pytest), configured via
 `AIVA_GATEWAY_*` env vars (`llm_backend`, defaulting to `mock`;
-`vllm_base_url`; `vllm_model`, defaulting to `Qwen2.5-14B-Instruct-AWQ`, the
-model recorded in `docs/MODEL_CARD.md`).
+`anthropic_api_key`; `anthropic_model`, defaulting to `claude-sonnet-5`).
 
 - `app/contracts.py` — the gateway's stable response contract. `JudgementBase`
   requires `rationale`, `confidence` (0–1), and `cited_span_ids` (at least
@@ -783,15 +788,18 @@ model recorded in `docs/MODEL_CARD.md`).
   output more realistic for testing.
 - `app/backends.py` — a pluggable `Backend` interface with two
   implementations: `MockBackend` (deterministic, hash-seeded fake data that
-  still validates against the real response schema — lets the rest of the
-  system be built and tested before real models/hardware exist) and
-  `VllmBackend` (calls a real vLLM OpenAI-compatible endpoint using
-  **guided/constrained decoding** — passing the Pydantic JSON schema as
-  `guided_json` — with `temperature=0` and a deterministic seed for
-  reproducibility; validates the model's response against the same schema and
-  raises a clear error if the model breaks contract). `GenerationResult`
-  records the `prompt_version`, `backend`, and `model_id` alongside every
-  generated result, giving full provenance for any AI output.
+  still validates against the real response schema — used by CI and by
+  `docker compose up` with zero setup) and `AnthropicBackend` (calls the real
+  Anthropic API with a **forced tool_use call** whose `input_schema` is the
+  exact Pydantic response-model schema, so the model's only possible reply is
+  schema-shaped — the same "impossible to return invalid output" property
+  `VllmBackend`'s `guided_json` gave the earlier self-hosted-model plan, now
+  without operating any GPU inference; see ADR-024 for why that plan was
+  dropped. `temperature=0` for closest-to-reproducible output, though unlike
+  `MockBackend` this is not a byte-identical guarantee — documented, not
+  glossed over. `GenerationResult` records the `prompt_version`, `backend`,
+  and `model_id` alongside every generated result, giving full provenance for
+  any AI output.
 
 `app/main.py` assembles a real, running FastAPI app (`create_app()`, same
 `docs_url=None`/`openapi_url="/openapi.json"` pattern as `apps/api`) exposing:
@@ -800,7 +808,7 @@ model recorded in `docs/MODEL_CARD.md`).
 - `GET /prompts` — lists every loaded prompt with its content-hash version
 - `POST /v1/generate` — the core endpoint: given a `prompt_id`, a
   `response_model` name, template `inputs`, and a `seed_key`, it renders the
-  prompt, runs it through the configured backend (mock or vLLM), validates
+  prompt, runs it through the configured backend (mock or anthropic), validates
   the result against the response contract, and returns the data plus its
   `prompt_version`/`backend`/`model_id` provenance. Missing template inputs,
   an unknown prompt, or an unknown response model all return clear 400/404
@@ -815,19 +823,25 @@ accordingly.
 The gateway now has a `Dockerfile` (same multi-stage, non-root pattern as
 `apps/api`) and is wired into `compose.yaml` as the `ai-gateway` service, port
 19100 (host) / 9100 (container), running in `mock` backend mode by default
-with its own healthcheck. It is now called by the main API's scoring-run
-endpoint (see the Resume ingest and matching section above) — the two
-services are genuinely connected, not just running side by side.
+with its own healthcheck; set `ANTHROPIC_API_KEY` and
+`AIVA_GATEWAY_LLM_BACKEND=anthropic` in a local `.env` to switch it to real
+inference with zero code changes. It is now called by the main API's
+scoring-run endpoint (see the Resume ingest and matching section above) — the
+two services are genuinely connected, not just running side by side.
 
 Per `docs/PLAN.md`, Milestone 3 is now marked delivered — labeled
-"mock-verified; GPU inference deferred to deployment" — with all 7 CI jobs
-green (including the previously-failing golden-set-against-live-container
-step, after the prompts-directory fix above). Explicitly deferred to actual
-GPU deployment, not part of this milestone: pulling the real
-Qwen2.5-14B-AWQ model weights into the runtime image, the full air-gapped
-(`--network none`) end-to-end interview proof, and evaluation thresholds
-measured against the real model rather than the mock backend. The backend
-interface is designed not to change when that lands.
+"mock-verified for CI/tests; real inference via the Anthropic API when
+configured (ADR-024)" — with all 7 CI jobs green (including the previously-
+failing golden-set-against-live-container step, after the prompts-directory
+fix above; CI itself always runs on `mock`, so it needs no API key or secret).
+`services/ai-gateway/tests/test_anthropic_backend.py` proves the real-backend
+request/response contract directly (forced tool_choice, schema validation,
+schema-invalid-output rejection, missing-tool_use rejection) by mocking the
+Anthropic SDK client — no network calls, no key needed to run that suite.
+Not part of this milestone: pulling real embedding/STT/TTS model weights
+(Anthropic has no API for those — see the Embeddings and Interview sessions
+sections below), and evaluation thresholds tuned against real model output
+rather than the mock backend's synthetic fill.
 
 ## Golden-set evaluation harness (`packages/eval`)
 
@@ -890,11 +904,18 @@ Full rationale in `docs/DECISIONS.md` (12 ADRs as of this update). Notable ones:
   `scripts/wait_ready.sh` (which polls `/readyz`) is used both locally and in
   CI, so readiness truth comes from the API rather than a container heuristic
   (ADR-013)
-- The design system's brand color (`--signal`) is not arbitrary: it was
-  sampled directly from a reference site's live CSS (primary blue `#1863DC`,
-  darker variant `#046BB3`) per a project style requirement, with a separate,
-  brighter derived color (`--signal-text`) added specifically so small
-  colored text still meets accessibility contrast guidelines (ADR-014)
+- The design system's brand color (`--signal`) is an original palette
+  (indigo-violet `#6C5CE7` dark theme / `#4B3ED1` light theme), with a
+  separate, higher-contrast derived color (`--signal-text`) so small colored
+  text still meets accessibility contrast guidelines — both re-verified
+  ≥4:1 (large UI) and ≥9:1 (`--signal-text`, small text) (ADR-014, values
+  superseded by ADR-024 when the palette was rebranded away from an earlier
+  reference site)
+- All AI reasoning (resume scoring, questionnaire evaluation, interview
+  question generation, evaluation reports) runs on the real Anthropic API
+  through `services/ai-gateway`, replacing an earlier plan to self-host an
+  open-weight model; the gateway's deterministic mock backend remains the
+  default for CI/local runs with no API key (ADR-024)
 - `exactOptionalPropertyTypes` was deliberately dropped from all frontend
   TypeScript configs after the `motion` animation library's types proved
   incompatible with it; every other strict-mode flag remains (ADR-015)
@@ -913,18 +934,17 @@ backup/restore, incident response — all pending Milestone 12).
 
 ## Planned AI capabilities
 
-All model inference routes through the local ai-gateway; deterministic mock
-backends stand in for weights that land at GPU deployment. `docs/MODEL_CARD.md`
-records the candidate model for each capability and its current status:
+All model inference routes through the single `ai-gateway` service. `docs/MODEL_CARD.md`
+records the candidate model/provider for each capability and its current status:
 
-| Capability | Candidate model | Milestone |
+| Capability | Provider/model | Milestone |
 |---|---|---|
-| LLM reasoning/scoring | Qwen2.5-14B-Instruct AWQ (fallback Llama-3.1-8B-Instruct) | M3 (mock-verified; weights at GPU deployment) |
-| Embeddings | bge-m3 (1024-dim) | M3 |
+| LLM reasoning/scoring | Anthropic API, `claude-sonnet-5` (mock backend for CI/zero-setup) | M3; real backend since ADR-024 |
+| Embeddings | all-MiniLM-L6-v2 (384-dim, local) — no embedding API exists to call instead | M3/M10 (mock-verified; weights pending local deployment) |
 | Resume parsing (NER) | spaCy pipeline | M4 |
 | OCR fallback | PaddleOCR / Tesseract | M4 |
-| Speech-to-text | faster-whisper large-v3 / distil-large-v3 | M8 interface shipped, mock-verified; weights pending deployment |
-| Text-to-speech | Piper (ONNX voices) | M8 interface shipped, mock-verified; voices pending deployment |
+| Speech-to-text | faster-whisper large-v3 / distil-large-v3 — no speech API exists to call instead | M8 interface shipped, mock-verified; weights pending deployment |
+| Text-to-speech | Piper (ONNX voices) — no speech API exists to call instead | M8 interface shipped, mock-verified; voices pending deployment |
 | Identity verification | InsightFace ArcFace (with consent gate) | deferred to M11 integrity work |
 | Proctoring signals | MediaPipe Face Mesh | deferred to M11 integrity work |
 | Reranker | bge-reranker-v2-m3 | M10 |

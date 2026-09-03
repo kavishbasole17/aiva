@@ -23,34 +23,49 @@ correction below.
 
 ## 1. What AIVA Is
 
-AIVA is an **air-gapped AI-powered candidate evaluation and interview automation
-platform**. It is designed to run entirely on-premise, with **zero external network
-calls at runtime** — every AI model used by the system is served locally rather than
-through a third-party cloud API.
+AIVA is an **AI-powered candidate evaluation and interview automation platform**,
+built to run on the client's own infrastructure (Postgres, Redis, object storage,
+and both web apps are entirely self-hosted). One capability is an explicit,
+documented exception to a fully local posture: **LLM reasoning — resume scoring,
+questionnaire evaluation, interview question generation, and evaluation reports —
+calls the Anthropic API** rather than a self-hosted model (see ADR-024 in
+`docs/DECISIONS.md` for why: operating GPU inference for an open-weight model was
+judged not worth the cost/complexity versus a hosted API call scoped to exactly
+that one capability).
 
-This design is aimed at organizations (e.g. in regulated hiring, government, or
-security-sensitive sectors) that need AI-assisted recruiting and interviewing without
-sending candidate data, transcripts, or evaluation results outside their own
-infrastructure.
+Organizations that need every byte to stay on their own network, including LLM
+reasoning, should not treat this build as air-gapped as-is — that would require
+reintroducing a self-hosted model behind the same `Backend` interface
+`AnthropicBackend` implements, which is a real (if non-trivial) option the
+architecture keeps open, not a design dead end.
 
-## 2. Why "Air-Gapped"
+## 2. Data-handling posture
 
-A core requirement of this project is that **no candidate or company data ever leaves
-the client's own network**:
-
-- No source file is permitted to contain a literal external URL.
-- Automated tooling enforces this in two independent, redundant ways: a linting
-  rule blocks it while writing frontend code, and a repository-wide scan script
-  blocks it for every other file type, checked against an explicit, reviewed
-  allowlist of narrow internal-only exceptions.
-- Production deployments run under a default-deny network policy — services cannot
-  reach the internet unless explicitly permitted.
-- All AI models are hosted and served locally rather than called via external APIs
-  (e.g. no calls to third-party LLM providers at runtime).
+- No source file is permitted to contain a literal external URL (enforced by a
+  frontend lint rule plus a repository-wide scan script, both checked against an
+  explicit, reviewed allowlist of narrow internal-only exceptions) — the
+  Anthropic SDK's endpoint is configured, not hardcoded as a URL, so this
+  discipline continues to apply to everything else in the codebase.
+- Production deployments run under a default-deny network policy — services
+  cannot reach the internet unless explicitly permitted; the one permitted
+  destination for the API-facing services is the Anthropic API, and only when
+  the `anthropic` LLM backend is explicitly selected (it defaults to a
+  deterministic local mock).
+- Every other AI capability — resume/JD text extraction, embeddings for FAQ
+  retrieval, speech-to-text/text-to-speech — is hosted and served locally, since
+  no equivalent hosted API exists for them to call even if it were wanted;
+  see `docs/MODEL_CARD.md`.
+- Candidate PII the client may not want reaching Anthropic (raw resume files,
+  recording bytes) is never sent — only extracted text/transcript spans needed
+  for the specific judgement being requested cross that boundary, and every such
+  call is logged with its prompt version and model id for auditability.
 - Secrets and credentials are never committed to the repository; all runtime
-  configuration is supplied via environment variables, validated at startup.
+  configuration, including `ANTHROPIC_API_KEY`, is supplied via environment
+  variables, validated at startup.
 
-This gives the client full data sovereignty and auditability over the entire pipeline.
+This gives the client data sovereignty over storage, transport, and every
+capability except the one explicitly named above, plus full auditability of
+when and why that one exception is invoked.
 
 ## 3. Intended System Components
 
@@ -322,8 +337,10 @@ foundations only; no end-user features exist yet.
 - AI model integration
 - Authentication, data model, and any candidate-facing features
 
-**In short:** the foundation (how services run, talk to each other, and stay
-air-gapped) is in place. Feature development has not started.
+**In short:** the foundation (how services run and talk to each other, with a
+default-deny network policy and exactly one explicit, auditable exception —
+the Anthropic API for LLM reasoning, see Section 2) is in place. Feature
+development has not started.
 
 ## 5. How to Run the Current Foundation (technical)
 
@@ -562,19 +579,21 @@ development team has already selected a candidate model for each planned
 capability, recorded in the codebase's model inventory and subject to a formal
 review before any model is actually integrated:
 
-| Capability | What it does | Candidate model |
+| Capability | What it does | Provider/model |
 |---|---|---|
-| Reasoning and scoring | The core "judgment" model behind candidate evaluation | Qwen2.5-14B-Instruct (with a smaller fallback model) |
-| Semantic search / matching | Powers vector-based matching (e.g. resume-to-role fit) | bge-m3 |
+| Reasoning and scoring | The core "judgment" model behind candidate evaluation | Anthropic API, `claude-sonnet-5` (ADR-024; deterministic local mock when no API key is configured) |
+| Semantic search / matching | Powers vector-based matching (e.g. resume-to-role fit) | all-MiniLM-L6-v2, run locally (no embedding API exists to call instead) |
 | Resume parsing | Extracts structured candidate information from resumes | spaCy-based, with OCR fallback for scanned documents |
-| Speech-to-text | Transcribes interview audio | faster-whisper |
-| Text-to-speech | Voice output for the AI interviewer | Piper |
+| Speech-to-text | Transcribes interview audio | faster-whisper, run locally (no speech API exists to call instead) |
+| Text-to-speech | Voice output for the AI interviewer | Piper, run locally (no speech API exists to call instead) |
 | Identity verification | Confirms the candidate's identity, with explicit consent | InsightFace (face matching) |
 | Proctoring | Detects signals relevant to exam/interview integrity | MediaPipe Face Mesh |
 | Result re-ranking | Refines and orders evaluation results | bge-reranker-v2-m3 |
 
-All of these are intended to run locally, consistent with the air-gap requirement
-described in Section 2. Every model is required to pass a formal review (purpose,
+Every capability except LLM reasoning runs locally — there is no hosted API to
+call for embeddings, speech, identity verification, or proctoring, so those
+stay on the local-model path described in Section 2. Every model is required
+to pass a formal review (purpose,
 license clearance for commercial use, hardware requirements, accuracy results on
 an internal benchmark set, known limitations) before it is integrated — this is a
 hard project rule, not a suggestion.

@@ -18,7 +18,7 @@ const buttonStyles: Record<ButtonVariant, string> = {
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
-  /** Trailing arrow affordance, e.g. Atigro-style feature-card CTAs. */
+  /** Trailing arrow affordance for feature-card CTAs. */
   arrow?: boolean;
 }
 

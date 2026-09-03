@@ -339,3 +339,52 @@ purpose. Scope creep into an unimplementable-responsibly demographic audit or an
 unbacked ML proctoring mock would have cost more (in false confidence, and in the
 compliance risk of pretending to check something the system has no data to check) than
 the narrower, honest versions shipped here.
+
+## ADR-024 — Anthropic API replaces the hand-built local/self-hosted LLM path; Atigro-derived branding removed
+
+Context: the product owner rejected the M3-era plan of a hand-rolled local-model
+serving layer (`VllmBackend` expecting operator-managed GPU weights for
+Qwen2.5-14B-AWQ, with `MockBackend` standing in until real hardware existed) as
+unnecessary complexity for what the product actually needs: real AI-backed judgement
+for scoring, questionnaire evaluation, interview question generation, and evaluation
+reports, without owning GPU inference infrastructure. Separately, the design system's
+brand color was explicitly sampled from a third-party reference site (atigro.com,
+ADR-014) and the product name must not carry any association with that site.
+Decision, AI backend: `services/ai-gateway/app/backends.py` gains `AnthropicBackend`,
+calling the hosted Anthropic API with a forced tool_use call whose `input_schema` is
+the exact Pydantic response-model schema — the same "impossible to return schema-invalid
+output" guarantee `VllmBackend`'s `guided_json` provided, now without any self-hosted
+model to operate. `VllmBackend` is removed outright, not deprecated-in-place — it served
+no purpose once the product doesn't run its own GPU inference. `MockBackend` is kept
+unchanged: it is a deterministic test double for CI, not part of what was rejected.
+`llm_backend` still defaults to `mock` (zero-setup local runs, no API key, no cost);
+`compose.yaml` opts into `anthropic` via `.env` (`ANTHROPIC_API_KEY` +
+`AIVA_GATEWAY_LLM_BACKEND=anthropic`), same opt-in shape ADR-017 established for
+STT/TTS backends. Determinism is now best-effort (`temperature=0`, no hard seed
+guarantee) rather than exact — documented rather than glossed over, since `scoring.py`'s
+`run_fingerprint` claim of byte-identical repeated runs no longer holds when the
+`anthropic` backend is selected (it still holds for `mock`, which is what CI and the
+determinism tests use).
+Decision, branding: the `--signal` design token (ADR-014's atigro.com-sampled
+`#1863dc`/`#046BB3`) is replaced with an original palette (`#6c5ce7` dark /
+`#4b3ed1` light, both re-verified ≥4:1 against their base surface, `--signal-text`
+re-verified ≥9:1 for small text — same AA discipline ADR-014 established, just against
+new values) and every code comment referencing "Atigro" (feature-card CTA styling,
+a theme-storage migration comment) is reworded to describe the behavior directly instead
+of citing the source. This supersedes ADR-014's color values but not its accessibility
+methodology.
+Consequences: the "no GPU hardware, no local model weights" framing throughout
+docs/MODEL_CARD.md and the README's planned-capabilities table no longer applies to
+LLM reasoning specifically — it becomes "no self-hosted model, calls Anthropic's API
+instead," which also means the air-gap/zero-egress framing for that one capability is
+gone (outbound calls to Anthropic's API are now real and expected when the `anthropic`
+backend is selected; `infra/egress_allowlist.txt`'s discipline continues to apply to
+hardcoded URLs in source, which this change adds none of — the Anthropic SDK manages
+its own endpoint). Embeddings (`SentenceTransformerEmbedder`) and STT/TTS
+(faster-whisper/Piper) are unchanged by this ADR: Anthropic has no embedding or speech
+API, so those stay on the existing mock-now/local-model-later path pending GPU
+deployment, per ADR-017.
+Rejected: keeping `VllmBackend` alongside `AnthropicBackend` as a second selectable
+option — the product owner's ask was explicitly to remove the hand-built path, not add
+a third one; if self-hosted inference is wanted again later, it re-enters through a new
+ADR with real hardware behind it, not a code path nobody runs.

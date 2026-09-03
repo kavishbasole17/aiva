@@ -9,7 +9,8 @@ fail-closed settings, strict CSP middleware, egress enforcement script (negative
 test proven), GitHub Actions pipeline. All six CI jobs green.
 
 ### Milestone 1 — Design system
-`packages/ui`: tokens.css with atigro.com-sampled brand values (ADR-014), fluid
+`packages/ui`: tokens.css with an original brand palette (ADR-014, rebranded under
+ADR-024), fluid
 type scale, motion tokens + spring constants, ThemeProvider (dark/light),
 `prefers-reduced-motion` collapse, Reveal/PageStagger one-shot scroll primitives,
 ScoreRing spring arc, Button/Input/Textarea/Card/Badge/EmptyState/Skeleton/Field,
@@ -26,22 +27,31 @@ requisition/staff CRUD, hash-chained append-only audit log with verification
 endpoint. Proven in CI integration job: two-org RLS isolation, full role×endpoint
 authorization matrix, refresh replay revocation, MFA flow, chain integrity.
 
-### Milestone 3 — AI gateway (mock-verified; GPU inference deferred to deployment)
+### Milestone 3 — AI gateway (mock-verified for CI; real backend is the Anthropic API, ADR-024)
 
 `services/ai-gateway`: stable typed contract (`DimensionScore`,
 `ResumeFieldExtraction` — every judgement carries rationale, confidence, and
 mandatory cited span ids per constraint 8.1), versioned prompt registry
 (SHA-truncated prompt versions returned with every response), pluggable backends:
-deterministic mock (schema-filling, seed-keyed, CI-safe) and vLLM backend using
-`guided_json` constrained decoding with temperature 0 and pinned seed so schema-
-invalid output is impossible by construction. Golden-set eval harness
+deterministic mock (schema-filling, seed-keyed, CI-safe, no API key needed) and
+`AnthropicBackend`, which forces a `tool_use` call whose `input_schema` is the
+exact response-model schema, so schema-invalid output is impossible by
+construction — the same guarantee an earlier self-hosted-model plan aimed for
+with `guided_json`, without operating any GPU inference (ADR-024 supersedes that
+plan outright, not a deprecation-in-place). Golden-set eval harness
 (`packages/eval`) runs against the live container in CI: schema validity +
-determinism asserted per case. Gateway quality gates green (ruff/black/mypy-strict/
-bandit/pytest); all 7 CI jobs green.
+determinism asserted per case (CI always uses the mock backend, so this needs no
+secret). `test_anthropic_backend.py` proves the real-backend contract by mocking
+the Anthropic SDK client directly: forced tool_choice, schema validation,
+rejection of schema-invalid tool input, rejection of a missing tool_use block.
+Gateway quality gates green (ruff/black/mypy-strict/bandit/pytest); all 7 CI
+jobs green.
 
-Deferred to GPU deployment: pulling Qwen2.5-14B-AWQ weights into the runtime image,
-the §13 `--network none` end-to-end interview proof, and real-model eval thresholds.
-The backend interface does not change when those land.
+Not deterministic the way `MockBackend` is: `temperature=0` gets the Anthropic
+backend close to reproducible, but the hosted API gives no hard seed guarantee —
+documented in ADR-024 rather than silently assumed. Embeddings/STT/TTS are
+unaffected by this milestone's backend swap (Anthropic has no API for either);
+they remain on the mock-now/local-model-later path per ADR-017.
 
 ### Milestone 4 — Resume ingest, matching, weighted scoring
 

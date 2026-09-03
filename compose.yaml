@@ -62,9 +62,16 @@ services:
     build:
       context: ./services/ai-gateway
     environment:
-      AIVA_GATEWAY_LLM_BACKEND: mock
+      # Defaults to the deterministic mock backend so `docker compose up` works
+      # with zero setup (CI, first clone, no API key). Set ANTHROPIC_API_KEY and
+      # AIVA_GATEWAY_LLM_BACKEND=anthropic in a local .env to enable real inference —
+      # see .env.example. Same opt-in pattern for embeddings.
+      AIVA_GATEWAY_LLM_BACKEND: ${AIVA_GATEWAY_LLM_BACKEND:-mock}
+      AIVA_GATEWAY_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AIVA_GATEWAY_ANTHROPIC_MODEL: ${AIVA_GATEWAY_ANTHROPIC_MODEL:-claude-sonnet-5}
       AIVA_GATEWAY_STT_BACKEND: mock
       AIVA_GATEWAY_TTS_BACKEND: mock
+      AIVA_GATEWAY_EMBED_BACKEND: ${AIVA_GATEWAY_EMBED_BACKEND:-mock}
     ports:
       - "19100:9100"
     healthcheck:

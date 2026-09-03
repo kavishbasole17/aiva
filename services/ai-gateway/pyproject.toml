@@ -1,7 +1,7 @@
 [project]
 name = "aiva-ai-gateway"
 version = "0.1.0"
-description = "Single entry point to all local AI models"
+description = "Single entry point to all AI inference — Anthropic Claude (real), deterministic mock (CI/tests)"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.115,<0.116",
@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-settings>=2.6,<3",
     "structlog>=24.4,<25",
     "httpx>=0.27,<0.28",
+    "anthropic>=0.40,<1",
 ]
 
 [project.optional-dependencies]

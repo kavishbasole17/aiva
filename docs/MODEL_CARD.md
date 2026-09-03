@@ -12,8 +12,8 @@ Milestone 3.
 
 | Capability | Candidate model | Card |
 |---|---|---|
-| LLM reasoning/scoring | Qwen2.5-14B-Instruct AWQ (fallback Llama-3.1-8B-Instruct) | interface + prompt registry shipped M3 (mock-verified, `services/ai-gateway`); weights pending GPU deployment |
-| Embeddings | all-MiniLM-L6-v2 (384-dim) — revised down from the original bge-m3/1024-dim plan; a smaller model was judged sufficient for FAQ-document retrieval scale | interface shipped M10 (`MockEmbedder`/`SentenceTransformerEmbedder`, mock-verified); weights pending GPU deployment |
+| LLM reasoning/scoring | Anthropic API, `claude-sonnet-5` (`AnthropicBackend`) — replaces the earlier self-hosted Qwen2.5-14B-Instruct-AWQ plan (ADR-024); no weights owned, no GPU operated | interface + prompt registry shipped M3, real backend since ADR-024 (`services/ai-gateway`); mock backend remains default for CI/local runs with no API key |
+| Embeddings | all-MiniLM-L6-v2 (384-dim) — revised down from the original bge-m3/1024-dim plan; a smaller model was judged sufficient for FAQ-document retrieval scale. Unaffected by ADR-024: Anthropic has no embedding API | interface shipped M10 (`MockEmbedder`/`SentenceTransformerEmbedder`, mock-verified); weights pending local deployment |
 | STT | faster-whisper large-v3 / distil-large-v3 | interface shipped M8 (mock-verified); weights pending GPU deployment |
 | TTS | Piper ONNX voices | interface shipped M8 (mock-verified); voices pending deployment |
 | Resume NER | spaCy pipeline | pending M4 — M4 shipped without it: deterministic regex/lexicon extraction (email/phone/LinkedIn/skills/years/name) proved sufficient and needed no model; spaCy NER remains a possible future precision improvement, not a blocking gap |
