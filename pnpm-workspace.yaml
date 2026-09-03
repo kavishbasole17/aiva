@@ -1,4 +1,0 @@
-packages:
-  - apps/web-recruiter
-  - apps/web-candidate
-  - packages/*
