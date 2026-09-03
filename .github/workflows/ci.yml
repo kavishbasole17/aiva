@@ -148,6 +148,7 @@ jobs:
           AIVA_MINIO_SECRET_KEY: aiva_dev_only_change_me
           AIVA_MINIO_BUCKET: aiva-artifacts
           AIVA_JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
+          AIVA_ENCRYPTION_KEY: seuo+Ju1ceofY4vl3k+/aGMYyxYQwgrxZpCwFW5HIS0=
         run: alembic upgrade head
       - name: Readiness against live stack
         working-directory: apps/api
@@ -156,6 +157,8 @@ jobs:
           AIVA_DATABASE_URL: postgresql+asyncpg://aiva_app:aiva_app_dev_only@localhost:15432/aiva
           AIVA_ADMIN_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@localhost:15432/aiva
           AIVA_JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
+          AIVA_ENCRYPTION_KEY: seuo+Ju1ceofY4vl3k+/aGMYyxYQwgrxZpCwFW5HIS0=
+          AIVA_ENVIRONMENT: test
           AIVA_REDIS_URL: redis://localhost:16379/0
           AIVA_MINIO_ENDPOINT: localhost:19000
           AIVA_MINIO_ACCESS_KEY: aiva_dev
@@ -170,6 +173,8 @@ jobs:
           AIVA_DATABASE_URL: postgresql+asyncpg://aiva_app:aiva_app_dev_only@localhost:15432/aiva
           AIVA_ADMIN_DATABASE_URL: postgresql+asyncpg://aiva:aiva_dev_only@localhost:15432/aiva
           AIVA_JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
+          AIVA_ENCRYPTION_KEY: seuo+Ju1ceofY4vl3k+/aGMYyxYQwgrxZpCwFW5HIS0=
+          AIVA_ENVIRONMENT: test
           AIVA_REDIS_URL: redis://localhost:16379/0
           AIVA_MINIO_ENDPOINT: localhost:19000
           AIVA_MINIO_ACCESS_KEY: aiva_dev

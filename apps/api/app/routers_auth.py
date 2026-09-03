@@ -20,6 +20,7 @@ from app.auth_service import (
 )
 from app.deps import get_app_settings, get_db, get_db_public, require_roles
 from app.models import Organization, Role, User
+from app.rate_limit import AUTH_LOGIN_LIMIT, AUTH_REFRESH_LIMIT, AUTH_REGISTER_LIMIT, limiter
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["auth"])
@@ -66,8 +67,9 @@ class MeResponse(BaseModel):
 
 
 @router.post("/auth/register-org", status_code=201)
+@limiter.limit(AUTH_REGISTER_LIMIT)
 async def register_organization(
-    body: RegisterOrgRequest, db: AsyncSession = Depends(get_db_public)
+    request: Request, body: RegisterOrgRequest, db: AsyncSession = Depends(get_db_public)
 ) -> dict[str, object]:
     existing = (
         await db.execute(select(Organization).where(Organization.name == body.organization_name))
@@ -104,6 +106,7 @@ async def register_organization(
 
 
 @router.post("/auth/login", response_model=TokenPairResponse)
+@limiter.limit(AUTH_LOGIN_LIMIT)
 async def login(
     body: LoginRequest,
     request: Request,
@@ -137,6 +140,7 @@ async def login(
 
 
 @router.post("/auth/refresh", response_model=TokenPairResponse)
+@limiter.limit(AUTH_REFRESH_LIMIT)
 async def refresh(
     body: RefreshRequest,
     request: Request,

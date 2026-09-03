@@ -1,6 +1,7 @@
+import base64
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(min_length=3, max_length=63)
     minio_secure: bool = False
     jwt_secret: str = Field(min_length=24)
+    encryption_key: str = Field(min_length=1)
     ai_gateway_url: str = ""
     sandbox_url: str = ""
     invite_token_days: int = 14
@@ -29,6 +31,17 @@ class Settings(BaseSettings):
     refresh_token_days: int = 14
     log_level: str = "INFO"
     environment: str = "development"
+
+    @field_validator("encryption_key")
+    @classmethod
+    def _validate_encryption_key(cls, value: str) -> str:
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except Exception as exc:
+            raise ValueError("AIVA_ENCRYPTION_KEY must be base64-encoded (32 raw bytes)") from exc
+        if len(raw) != 32:
+            raise ValueError(f"AIVA_ENCRYPTION_KEY must decode to exactly 32 bytes, got {len(raw)}")
+        return value
 
 
 @lru_cache

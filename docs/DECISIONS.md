@@ -388,3 +388,70 @@ Rejected: keeping `VllmBackend` alongside `AnthropicBackend` as a second selecta
 option — the product owner's ask was explicitly to remove the hand-built path, not add
 a third one; if self-hosted inference is wanted again later, it re-enters through a new
 ADR with real hardware behind it, not a code path nobody runs.
+
+## ADR-025 — Application-level encryption at rest for the most sensitive text columns; API-wide rate limiting
+
+Context: the product owner required that stored data "must be encrypted and should
+not be accessible by any third party," and separately that API routes carry rate
+limiting and input validation — both already flagged as open gaps in this repo's own
+docs (`docs/RUNBOOK.md`'s "Known open items", MinIO encryption deferred to M12 per
+ADR-008; no rate limiting existed anywhere in `apps/api`).
+Decision, encryption: `apps/api/app/crypto.py` adds `EncryptedText`, a SQLAlchemy
+`TypeDecorator` performing AES-256-GCM (via the `cryptography` library) transparently
+at the ORM boundary — every other module keeps reading/writing these columns as plain
+Python `str`, so `text_extract.py`, `matching.py`, and every existing test needed zero
+changes. Applied to the four highest-sensitivity text columns, chosen because none of
+them are used in any SQL `WHERE`/filter predicate (verified by grep before touching
+anything — encrypting a column that's queried on would have silently broken lookups):
+`resume_documents.full_text`, `extracted_fields.value`, `extracted_fields.source_quote`,
+`interview_turns.answer_text`. Migration `0013_encrypt_sensitive_text` converts each
+column from `TEXT` to `BYTEA`; since this repo has no production data (dev/demo only),
+existing rows are reinterpreted as raw UTF-8 bytes rather than actually encrypted —
+documented in the migration's own docstring, not glossed over — so a fresh
+migrate+reseed (the existing documented quickstart) is required, not a silent gap.
+The key (`AIVA_ENCRYPTION_KEY`, base64 for exactly 32 raw bytes) is validated
+fail-closed in `settings.py`'s own `field_validator`, same discipline as `jwt_secret`;
+a checked-in dev-only default lives in `compose.yaml` (ADR-013's precedent), with
+`.env.example` documenting how to generate a real one.
+Explicitly out of scope for this pass, not silently omitted: code submissions,
+whiteboard strokes, and discussion messages (lower sensitivity — code, not identity
+data); `candidate_email` columns (needed in `WHERE` clauses for dedup/lookup —
+encrypting them would require deterministic encryption or a blind index, a larger
+change deferred to a follow-up); MinIO/object-storage encryption (still ADR-008's
+KES/Vault plan, deferred to M12 — this repo doesn't actually persist raw resume files
+to object storage yet, only extracted text to Postgres, so there is no file-storage
+path to encrypt today).
+Decision, rate limiting: `app/rate_limit.py` wraps `slowapi` (in-memory storage,
+IP-keyed via `get_remote_address`) with a conservative global default
+(`200/minute`, applied to every route via `SlowAPIMiddleware`) plus stricter explicit
+limits on the classic brute-force targets: `/auth/login` (10/minute), `/auth/register-org`
+(5/minute), `/auth/refresh` (30/minute), and the two most enumeration-exposed public
+token-gated GET endpoints (`/public/questionnaires/{raw_token}`,
+`/public/interview-sessions/{raw_token}`, 30/minute) — these are unauthenticated by
+design, so the raw token itself is the only secret, making them worth extra protection
+against token brute-forcing. The other ~15 public token-gated endpoints rely on the
+200/minute global default rather than individual tuning, a real but narrower gap noted
+here rather than claimed as exhaustively covered.
+A real regression this surfaced and fixed before it shipped: `slowapi`'s `Limiter` is a
+process-wide in-memory singleton, and this repo's own "integration" tests
+(`test_integration_*.py`) construct many separate in-process `create_app()` instances
+within one pytest run via `app/main.py`'s `create_app()` — all sharing that one
+singleton's request counters. Without a fix, cumulative login/register calls across a
+single test file (e.g. `test_integration_auth.py`'s several bootstrap-heavy tests) would
+exceed the new per-minute limits and start failing previously-passing tests with 429s —
+a self-inflicted regression, not a hypothetical one. Fixed via `settings.environment`:
+`main.py`'s lifespan sets `limiter.enabled = settings.environment != "test"`, and
+`AIVA_ENVIRONMENT=test` is now set in every CI integration-job step and in
+`tests/conftest.py`'s offline fixture — verified by re-running the full offline suite
+(90 passed, 30 skipped, 0 failed) after the change, not assumed safe.
+Consequences: `apps/api`'s quality gate (ruff, black, mypy --strict, bandit, pytest)
+stayed fully green through this change, including a bandit `B105` false positive
+(a rate-limit-string constant named `PUBLIC_TOKEN_LIMIT` was flagged as a hardcoded
+password purely because its name contained "TOKEN" — renamed to `PUBLIC_ENDPOINT_LIMIT`
+rather than suppressed) and a genuine `B101` finding (an `assert` used for type
+narrowing in a request handler, which is stripped under `-O` — replaced with an
+explicit `isinstance` check that raises `TypeError`, not suppressed either).
+Rejected: encrypting `candidate_email` in this pass (breaks existing dedup/lookup
+queries without a larger design change); a Redis-backed rate-limit store (unnecessary
+at this scale — `Limiter(storage_uri=...)` is a one-line swap if it's ever needed,
+same "interface now, harder backend later" pattern as ADR-017's STT/TTS/LLM backends).

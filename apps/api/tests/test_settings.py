@@ -12,6 +12,8 @@ REQUIRED = {
     "AIVA_MINIO_ACCESS_KEY": "key",
     "AIVA_MINIO_SECRET_KEY": "secret",
     "AIVA_MINIO_BUCKET": "bucket",
+    "AIVA_JWT_SECRET": "test-jwt-secret-0123456789abcdef",
+    "AIVA_ENCRYPTION_KEY": "b2ZmbGluZS10ZXN0LWtleS0zMi1ieXRlcy1sb25nISE=",
 }
 
 
@@ -34,6 +36,7 @@ def test_valid_environment_parses(
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("AIVA_MINIO_SECURE", "true")
+    monkeypatch.delenv("AIVA_ENVIRONMENT", raising=False)
     settings = Settings()
     assert settings.minio_secure is True
     assert settings.log_level == "INFO"

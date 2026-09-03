@@ -25,6 +25,8 @@ dependencies = [
     "pgvector>=0.3,<0.4",
     "reportlab>=4.2,<5",
     "openpyxl>=3.1,<4",
+    "cryptography>=43,<44",
+    "slowapi>=0.1.9,<0.2",
 ]
 
 [project.optional-dependencies]

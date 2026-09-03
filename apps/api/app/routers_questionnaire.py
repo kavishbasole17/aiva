@@ -2,7 +2,7 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from app.questionnaire_service import (
     missing_required_answers,
     validate_questions,
 )
+from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["questionnaires"])
@@ -188,8 +189,9 @@ async def create_invite(
 
 
 @router.get("/public/questionnaires/{raw_token}")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def get_public_questionnaire(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    request: Request, raw_token: str, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     invite = (
         await db.execute(
