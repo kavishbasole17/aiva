@@ -1132,16 +1132,24 @@ automatically on every change" as two separate claims going forward, even
 now that the gap above is closed.
 
 **Milestones 6 and 7 are marked "(core)"** — PLAN.md explicitly scopes out,
-as deliberately deferred rather than forgotten: for Milestone 6, AI-based
-evaluation of candidate answers and resume-inconsistency flagging (blocked
-on a real AI model being deployed at Milestone 3, though the gateway
-contract to support it already exists), the candidate-facing portal
-screens, and persistent storage for file-upload-type question answers; for
-Milestone 7, actually sending the `.ics` invite and reminder emails
-(deferred to Milestone 12, which is where a self-hosted mail server gets
-wired into the compose stack), the candidate-facing self-scheduling UI
-(arrives with the Milestone 6 portal), and a cap on how many interviews one
+as deliberately deferred rather than forgotten: for Milestone 6, the
+candidate-facing portal screens and persistent storage for file-upload-type
+question answers; for Milestone 7, the candidate-facing self-scheduling UI
+(arrives with the Milestone 6 portal) and a cap on how many interviews one
 interviewer can be booked into per slot.
+
+Two items originally deferred here have since been delivered. AI-based
+evaluation of candidate questionnaire answers and resume-inconsistency
+flagging was blocked on a real AI model being deployed at Milestone 3 (the
+gateway contract to support it already existed) — ADR-024's switch to the
+real Anthropic API unblocked it, and ADR-033 delivered it:
+`POST /questionnaire-responses/{id}/evaluate`. Actually sending the `.ics`
+invite and questionnaire-portal emails was deferred to Milestone 12's
+self-hosted mail server — ADR-031 delivered it earlier, via a pluggable
+`EmailProvider` (log stub by default, real SMTP via stdlib `smtplib`) rather
+than requiring a bundled mail server; reminder emails (T-24h/T-1h) still
+need a scheduler that doesn't exist yet, same gap as automated retention
+runs (ADR-029).
 
 Milestone 8 (consent, device pre-check, adaptive STT/TTS interview loop,
 and the live candidate HUD), Milestone 9 (sandboxed live-coding workspace:

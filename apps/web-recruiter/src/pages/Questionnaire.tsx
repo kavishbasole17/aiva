@@ -4,12 +4,19 @@ import { Badge, Button, Card, EmptyState, Field, Input, Skeleton } from "@aiva/u
 import {
   createQuestionnaire,
   createQuestionnaireInvite,
+  evaluateQuestionnaireResponse,
   listQuestionnaireResponses,
   listQuestionnaires,
   type QuestionnaireQuestion,
   type QuestionnaireResponseSummary,
   type QuestionnaireSummary,
 } from "../api/client";
+
+const RECOMMENDATION_TONE: Record<string, "positive" | "warning" | "negative"> = {
+  proceed: "positive",
+  hold: "warning",
+  reject: "negative",
+};
 
 const QUICK_START_TEMPLATE: QuestionnaireQuestion[] = [
   { id: "notice_period", prompt: "What is your current notice period?", type: "short_text", required: true },
@@ -60,6 +67,7 @@ export function QuestionnairePage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
 
   useEffect(() => {
     document.title = "AIVA — Questionnaire";
@@ -113,6 +121,24 @@ export function QuestionnairePage() {
       setError(cause instanceof Error ? cause.message : "Failed to send invite");
     } finally {
       setInviteBusy(false);
+    }
+  }
+
+  async function runEvaluation(responseId: string) {
+    setEvaluatingId(responseId);
+    setError(null);
+    try {
+      const evaluation = await evaluateQuestionnaireResponse(responseId);
+      setResponses(
+        (prev) =>
+          prev?.map((response) =>
+            response.id === responseId ? { ...response, ai_evaluation: evaluation } : response,
+          ) ?? prev,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to evaluate response");
+    } finally {
+      setEvaluatingId(null);
     }
   }
 
@@ -226,6 +252,42 @@ export function QuestionnairePage() {
               <p className="mt-2 text-xs text-[var(--warning)]">
                 Missing: {response.missing_required.join(", ")}
               </p>
+            ) : null}
+            {response.submitted && !response.ai_evaluation ? (
+              <div className="mt-3">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    void runEvaluation(response.id);
+                  }}
+                  disabled={evaluatingId === response.id}
+                >
+                  {evaluatingId === response.id ? "Evaluating…" : "Evaluate with AI"}
+                </Button>
+              </div>
+            ) : null}
+            {response.ai_evaluation ? (
+              <div className="mt-4 border-t border-[var(--steel)] pt-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone={RECOMMENDATION_TONE[response.ai_evaluation.recommendation] ?? "neutral"}>
+                    {response.ai_evaluation.recommendation}
+                  </Badge>
+                  <p className="mono text-xs text-[var(--haze)]">
+                    Score {response.ai_evaluation.overall_score}/100
+                  </p>
+                </div>
+                <p className="mt-2 text-sm">{response.ai_evaluation.rationale}</p>
+                {response.ai_evaluation.inconsistencies.length > 0 ? (
+                  <p className="mt-2 text-xs text-[var(--danger)]">
+                    Inconsistencies: {response.ai_evaluation.inconsistencies.join("; ")}
+                  </p>
+                ) : null}
+                {response.ai_evaluation.missing_critical_info.length > 0 ? (
+                  <p className="mt-2 text-xs text-[var(--warning)]">
+                    Missing critical info: {response.ai_evaluation.missing_critical_info.join("; ")}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </Card>
         ))}

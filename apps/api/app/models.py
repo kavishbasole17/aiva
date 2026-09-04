@@ -254,6 +254,7 @@ class QuestionnaireResponse(Base):
     missing_required: Mapped[list[str]] = mapped_column(JSONB, default=list)
     submitted: Mapped[bool] = mapped_column(Boolean, default=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_evaluation: Mapped[dict[str, object] | None] = mapped_column(JSONB, default=None)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=utcnow
     )

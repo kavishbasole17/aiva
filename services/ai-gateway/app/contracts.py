@@ -4,6 +4,8 @@ Every judgement AIVA stores must carry the evidence and versioning fields below,
 so a score can always be traced to its source (constraint 8.1).
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -35,11 +37,23 @@ class EvaluationSummary(JudgementBase):
     concerns: list[str] = Field(min_length=1)
 
 
+class QuestionnaireEvaluation(JudgementBase):
+    """AI evaluation of a candidate's questionnaire answers -- was blocked on
+    a real AI model being deployed (Milestone 6's own scope note), unblocked
+    by ADR-024's switch to the Anthropic API."""
+
+    overall_score: int = Field(ge=0, le=100)
+    recommendation: Literal["proceed", "hold", "reject"]
+    inconsistencies: list[str] = Field(default_factory=list)
+    missing_critical_info: list[str] = Field(default_factory=list)
+
+
 RESPONSE_MODELS: dict[str, type[BaseModel]] = {
     "DimensionScore": DimensionScore,
     "ResumeFieldExtraction": ResumeFieldExtraction,
     "FaqAnswer": FaqAnswer,
     "EvaluationSummary": EvaluationSummary,
+    "QuestionnaireEvaluation": QuestionnaireEvaluation,
 }
 
 

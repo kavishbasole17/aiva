@@ -95,9 +95,10 @@ required-answer completeness enforcement on submit, staff-facing response listin
 Public endpoints are token-scoped; completed/expired links return 409/410.
 All 7 CI jobs green.
 
-Deferred within M6: AI evaluation of answers + resume-inconsistency flags (needs M3
-model deployment for meaningful output — the gateway contract exists), candidate
-portal UI pages, file-upload question storage.
+Deferred within M6 originally, since delivered (ADR-033): AI evaluation of answers +
+resume-inconsistency flags, via `POST /questionnaire-responses/{id}/evaluate` —
+was blocked on M3's mock model, unblocked by ADR-024's real Anthropic backend. Still
+deferred: candidate portal UI pages, file-upload question storage.
 
 ### Milestone 7 (core) — DST-correct scheduling + local .ics
 

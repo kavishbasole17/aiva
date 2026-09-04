@@ -805,3 +805,62 @@ manual-secret-entry path this ships is already how every authenticator app expec
 to support accounts that can't be scanned, and pulling in a new frontend dependency
 for a convenience the flow doesn't strictly need wasn't worth the audit-surface cost
 (ADR-007's "dependencies land on first use, not speculatively" precedent).
+
+## ADR-033 — AI evaluation of submitted questionnaire responses
+
+Context: `docs/PLAN.md`'s Milestone 6 entry and this repo's README had, since the
+questionnaire feature was first built, explicitly named "AI-based evaluation of
+candidate answers (score, recommendation, inconsistency vs. resume, missing critical
+info)" as scoped out pending a real AI model being deployed -- the questionnaire
+pipeline could collect and store answers but never judge them. ADR-024's swap from
+the hand-rolled local model backend to the real Anthropic API removed that blocker.
+Decision: a new `QuestionnaireEvaluation` Pydantic contract
+(`services/ai-gateway/app/contracts.py`) extends `JudgementBase` (so it inherits the
+evidence-citation discipline every other judgement contract in this gateway has --
+`rationale`, `confidence`, `cited_span_ids`) with `overall_score` (0-100),
+`recommendation` (`Literal["proceed", "hold", "reject"]`), `inconsistencies`, and
+`missing_critical_info`. A new prompt (`prompts/questionnaire_evaluation.txt`) feeds
+the gateway the job description clause, the candidate's question/answer pairs, and
+extracted resume spans, with the same prompt-injection-hardening rule every other
+prompt in this gateway carries. `apps/api` adds `POST
+/questionnaire-responses/{id}/evaluate` (`routers_questionnaire.py`): loads the
+submitted response, the questionnaire's question text, the org's latest job
+description, and a best-effort resume match by candidate email, calls the gateway,
+and persists the result on a new `questionnaire_responses.ai_evaluation` JSONB
+column (migration `0014_questionnaire_ai_evaluation`) so it's computed once and
+served from storage afterward, not recomputed on every read. Evaluating a response
+that hasn't been submitted yet is rejected (409) rather than silently evaluated
+against incomplete answers.
+Bug found and fixed along the way: `MockBackend`'s `_deterministic_fill`
+(`backends.py`) had no handling for enum-constrained fields. Every prior contract in
+this gateway happened to have only free-form string/int/float fields, so the gap was
+latent; `recommendation`'s `Literal["proceed","hold","reject"]` was the first field
+that needed it, and the generic string branch synthesized a placeholder value
+matching none of the three allowed choices, failing the same model's own validation
+a few lines later. Fixed by reading the field's JSON-schema `enum` list, when
+present, and picking deterministically from the real allowed values instead --
+preserving the "byte-seeded but always schema-valid" guarantee for any current or
+future enum-typed contract field, not just this one.
+Verified: `services/ai-gateway`'s full quality gate (black, ruff, mypy, bandit,
+pytest) is clean, including a regression test
+(`test_questionnaire_evaluation_is_schema_valid_and_deterministic`) that explicitly
+targets the enum bug rather than just checking a 200 status. `apps/api`'s gate is
+clean the same way. Two new integration tests
+(`test_ai_evaluation_of_submitted_response`, `test_evaluation_rejected_before_submission`
+in `test_integration_questionnaire.py`) were run against a fresh, fully-migrated live
+compose stack (real Postgres/Redis/MinIO/ai-gateway containers, not mocks) and pass;
+the complete 39-test domain-lifecycle integration suite (readiness, auth, resume,
+questionnaire, scheduling, retention, interview, workspace, faq, evaluation, m11) was
+re-run against that same fresh stack afterward with no regressions.
+Consequences: closes a specifically-named, long-carried Milestone 6 gap. The
+resume-match used to build `resume_spans` is a best-effort `candidate_email` lookup
+within the org, not a guaranteed link between a questionnaire response and a specific
+resume upload -- if no matching resume exists the evaluation still runs, just without
+that evidence, which is the correct degrade-gracefully behavior rather than blocking
+evaluation on an unrelated upload existing.
+Rejected: auto-running the evaluation the instant a response is submitted. Kept it as
+an explicit staff-triggered action (mirrors the resume/JD scoring flow's own
+already-established pattern) so a recruiter decides when to spend the AI call rather
+than every candidate submission silently triggering one, and so a re-evaluation after
+a resume is uploaded later is a deliberate action rather than something that has to
+detect and race against out-of-order uploads.

@@ -186,6 +186,16 @@ export interface QuestionnaireSummary {
   question_count: number;
 }
 
+export interface QuestionnaireEvaluation {
+  overall_score: number;
+  recommendation: "proceed" | "hold" | "reject";
+  inconsistencies: string[];
+  missing_critical_info: string[];
+  rationale: string;
+  confidence: number;
+  cited_span_ids: string[];
+}
+
 export interface QuestionnaireResponseSummary {
   id: string;
   candidate_email: string | null;
@@ -194,6 +204,7 @@ export interface QuestionnaireResponseSummary {
   missing_required: string[];
   history_entries: number;
   answers: Record<string, unknown>;
+  ai_evaluation: QuestionnaireEvaluation | null;
 }
 
 export interface InterviewSlotSummary {
@@ -511,6 +522,12 @@ export function listQuestionnaireResponses(
   requisitionId: string,
 ): Promise<{ responses: QuestionnaireResponseSummary[] }> {
   return request(`/requisitions/${requisitionId}/questionnaire-responses`);
+}
+
+export function evaluateQuestionnaireResponse(
+  responseId: string,
+): Promise<QuestionnaireEvaluation> {
+  return request(`/questionnaire-responses/${responseId}/evaluate`, { method: "POST" });
 }
 
 // --- Scheduling ---

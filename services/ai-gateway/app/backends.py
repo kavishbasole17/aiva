@@ -27,7 +27,18 @@ def _deterministic_fill(
         spec_dict: dict[str, object] = spec  # type: ignore[assignment]
         field_type = str(spec_dict.get("type", "string"))
         byte = seed_bytes[index % len(seed_bytes)]
-        if name == "confidence":
+        enum_values = spec_dict.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            # A Literal/enum-constrained field (e.g. a fixed set of
+            # recommendation verdicts): the generic string branch below
+            # would synthesize a value matching no allowed choice, failing
+            # this same model's own validation a few lines later. Picking
+            # deterministically from the real allowed set keeps the mock
+            # backend's "byte-seeded but always schema-valid" guarantee
+            # intact for any current or future enum-typed contract field,
+            # not just recommendation specifically.
+            filled[name] = enum_values[byte % len(enum_values)]
+        elif name == "confidence":
             filled[name] = round(0.5 + (byte / 510), 2)
         elif field_type == "integer":
             minimum_raw = spec_dict.get("minimum", 0)

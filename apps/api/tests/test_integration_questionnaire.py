@@ -149,3 +149,119 @@ async def test_invalid_questionnaire_rejected(http: httpx.AsyncClient) -> None:
 async def test_healthz_alive(http: httpx.AsyncClient) -> None:
     response = await http.get("/healthz")
     assert response.status_code == 200
+
+
+async def test_ai_evaluation_of_submitted_response(http: httpx.AsyncClient) -> None:
+    """Explicitly scoped out of Milestone 6 pending a real AI model
+    (docs/PLAN.md's own note); unblocked by ADR-024, delivered by ADR-033.
+    Proves the full round trip against the real (containerized) AI gateway,
+    not just that the endpoint exists."""
+    headers, organization_id = await _staff_context(http)
+    dept = await http.post(
+        f"/orgs/{organization_id}/departments", json={"name": "Eval"}, headers=headers
+    )
+    req = await http.post(
+        f"/departments/{dept.json()['id']}/requisitions",
+        json={"title": "Backend Engineer", "department_id": dept.json()["id"]},
+        headers=headers,
+    )
+    rid = req.json()["id"]
+
+    created = await http.post(
+        f"/requisitions/{rid}/questionnaires",
+        json={
+            "title": "Screening",
+            "questions": [
+                {
+                    "id": "notice",
+                    "type": "short_text",
+                    "prompt": "Notice period?",
+                    "required": True,
+                },
+            ],
+        },
+        headers=headers,
+    )
+    qid = created.json()["id"]
+
+    invite = await http.post(
+        f"/questionnaires/{qid}/invites",
+        json={"candidate_email": "eval-candidate@example.test"},
+        headers=headers,
+    )
+    token = invite.json()["token"]
+
+    # Evaluating before submission is rejected, not silently evaluated on
+    # incomplete data.
+    responses_before = await http.get(
+        f"/requisitions/{rid}/questionnaire-responses", headers=headers
+    )
+    assert responses_before.json()["responses"] == []
+
+    submit = await http.put(
+        f"/public/questionnaires/{token}/responses",
+        json={"answers": {"notice": "2 weeks"}, "submit": True},
+    )
+    assert submit.status_code == 200, submit.text
+
+    responses = await http.get(f"/requisitions/{rid}/questionnaire-responses", headers=headers)
+    response_row = responses.json()["responses"][0]
+    assert response_row["ai_evaluation"] is None
+    response_id = response_row["id"]
+
+    evaluation = await http.post(
+        f"/questionnaire-responses/{response_id}/evaluate", headers=headers
+    )
+    assert evaluation.status_code == 200, evaluation.text
+    body = evaluation.json()
+    assert body["recommendation"] in {"proceed", "hold", "reject"}
+    assert 0 <= body["overall_score"] <= 100
+    assert isinstance(body["inconsistencies"], list)
+    assert isinstance(body["missing_critical_info"], list)
+
+    # Persisted: a fresh GET now shows the evaluation without re-running it.
+    responses_after = await http.get(
+        f"/requisitions/{rid}/questionnaire-responses", headers=headers
+    )
+    assert responses_after.json()["responses"][0]["ai_evaluation"] == body
+
+
+async def test_evaluation_rejected_before_submission(http: httpx.AsyncClient) -> None:
+    headers, organization_id = await _staff_context(http)
+    dept = await http.post(
+        f"/orgs/{organization_id}/departments", json={"name": "Eval2"}, headers=headers
+    )
+    req = await http.post(
+        f"/departments/{dept.json()['id']}/requisitions",
+        json={"title": "Role", "department_id": dept.json()["id"]},
+        headers=headers,
+    )
+    rid = req.json()["id"]
+    created = await http.post(
+        f"/requisitions/{rid}/questionnaires",
+        json={
+            "title": "Screening",
+            "questions": [
+                {"id": "notice", "type": "short_text", "prompt": "Notice period?"},
+            ],
+        },
+        headers=headers,
+    )
+    qid = created.json()["id"]
+    invite = await http.post(
+        f"/questionnaires/{qid}/invites",
+        json={"candidate_email": "unfinished@example.test"},
+        headers=headers,
+    )
+    token = invite.json()["token"]
+    await http.put(
+        f"/public/questionnaires/{token}/responses",
+        json={"answers": {}, "submit": False},
+    )
+    responses = await http.get(f"/requisitions/{rid}/questionnaire-responses", headers=headers)
+    response_id = responses.json()["responses"][0]["id"]
+
+    evaluation = await http.post(
+        f"/questionnaire-responses/{response_id}/evaluate", headers=headers
+    )
+    assert evaluation.status_code == 409
