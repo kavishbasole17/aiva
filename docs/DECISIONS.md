@@ -864,3 +864,47 @@ already-established pattern) so a recruiter decides when to spend the AI call ra
 than every candidate submission silently triggering one, and so a re-evaluation after
 a resume is uploaded later is a deliberate action rather than something that has to
 detect and race against out-of-order uploads.
+
+## ADR-034 — Interview reminder emails (T-24h / T-1h), the one M7 gap ADR-031 left open
+
+Context: `docs/PLAN.md`'s M7 entry and ADR-031 both explicitly named T-24h/T-1h
+interview reminders as still deferred, "needs a scheduler, same gap ADR-029's
+retention job has." ADR-029 itself reasoned that building a scheduler around
+*retention* specifically would be premature -- that endpoint's eligibility policy
+can't yet model "is this candidate still in an active pipeline," so automating it
+blind was a real risk, not just missing infrastructure. Reminders don't carry that
+landmine: a slot is either booked with a start time inside its reminder window and
+hasn't been reminded yet, or it isn't -- there's no policy-correctness question
+sending a reminder can get wrong the way auto-erasing a candidate's data can.
+Decision: `POST /orgs/{id}/interview-reminders/run` (`routers_reminders.py`) follows
+ADR-029's exact shape otherwise -- an idempotent, staff-authenticated endpoint a real
+scheduler (cron, systemd timer, Kubernetes CronJob) is meant to invoke periodically,
+not an in-process scheduler dependency this codebase doesn't otherwise have any
+precedent for. Two new nullable timestamp columns on `interview_slots`
+(`reminder_24h_sent_at`, `reminder_1h_sent_at`, migration 0015) record whether each
+window's reminder has already gone out; a slot is due for a window once `start_at`
+falls inside it and that column is still null. Because "due" is a window rather than
+an exact instant, a deployer invoking this every 15-30 minutes (or far less often)
+still catches everything that opened since the last run, and both windows can fire
+in the same call for a slot discovered late (e.g. the very first run against a slot
+already inside the 1h window) -- correct behavior, not a bug, since a late reminder
+is still useful and the sent-at columns make a genuine duplicate impossible either
+way. Emails go through the same `EmailProvider` (ADR-031) as booking confirmations.
+Verified: `test_integration_reminders.py` proves a slot 20 minutes out gets both
+windows on the first run and neither on a second (idempotency), a slot 20 hours out
+gets only the 24h window, a slot 3 days out gets neither, and cross-org access is
+denied -- slot start times are computed relative to real wall-clock time via the
+existing pure `generate_slots` arithmetic (no real waiting, no direct DB
+manipulation, staying consistent with every other integration test's HTTP-only
+discipline). The full 43-test domain-lifecycle suite was re-run against a fresh,
+fully-migrated live stack afterward with no regressions. `black`/`ruff`/`mypy`/
+`bandit` all clean.
+Consequences: closes the one specifically-named gap ADR-031 left open. The frontend
+has no reminder-status UI yet -- reminders are visible to a recruiter only via the
+run response and the audit log, not the slot list; genuinely low priority, since the
+audience for this endpoint is a scheduler, not a person clicking a button.
+Rejected: adding an in-process background scheduler (APScheduler or a bare asyncio
+loop) to send reminders automatically. Would have been the first background-task
+subsystem anywhere in this codebase, for a job whose correct cadence (how often is
+"often enough") is exactly the kind of deployment-environment decision ADR-029 already
+reasoned belongs to the deployer, not baked into the app process.

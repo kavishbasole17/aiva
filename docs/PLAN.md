@@ -116,9 +116,13 @@ All 7 CI jobs green.
 Deferred within M7 originally, since delivered (ADR-031): email delivery of `.ics`
 invites via a pluggable provider (`app/email.py` — log-only by default, real SMTP
 opt-in), no self-hosted Postfix required (stdlib `smtplib` against any real SMTP
-host/relay instead). Still deferred: T-24h/T-1h reminders (needs a scheduler, same
-gap ADR-029's retention job has), candidate-facing self-select UI (the actual booking
-endpoint is staff-only by design, ADR-026), interviewer-per-slot caps.
+host/relay instead). T-24h/T-1h reminders, since delivered (ADR-034): `POST
+/orgs/{id}/interview-reminders/run`, an idempotent endpoint a real scheduler (cron,
+systemd timer, K8s CronJob) invokes periodically -- same "expose the endpoint, the
+deployer wires the cadence" shape as retention, without automating a policy the
+codebase can't fully validate the way retention's active-pipeline gap would have.
+Still deferred: candidate-facing self-select UI (the actual booking endpoint is
+staff-only by design, ADR-026), interviewer-per-slot caps.
 
 ### Milestone 8 (core) — Interview sessions: consent, device pre-check, adaptive STT/TTS loop, HUD
 

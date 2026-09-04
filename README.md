@@ -303,9 +303,15 @@ same RLS-enforced pattern as every other table, and `app/routers_scheduling.py`
 **Update (ADR-031)**: `POST /slots/{id}/book` now also emails the `.ics`
 invite to the candidate via `app/email.py`'s pluggable provider (log-only by
 default — see the Email delivery section below), not just returning it in
-the API response. Still not built: T-24h/T-1h reminder emails (a scheduled
-job that doesn't exist yet, same "needs a scheduler" gap ADR-029's
-retention job has).
+the API response.
+
+**Update (ADR-034)**: `POST /orgs/{id}/interview-reminders/run` sends T-24h/
+T-1h reminder emails for booked slots whose reminder window has opened,
+idempotently (a `reminder_24h_sent_at`/`reminder_1h_sent_at` pair on each
+slot prevents duplicates). Same shape as the retention endpoint (ADR-029): a
+real scheduler (cron, systemd timer, Kubernetes CronJob) is meant to invoke
+it periodically — choosing and wiring that invocation is a deployment
+decision, not something this repo bundles.
 
 ## Email delivery (`apps/api`) — ADR-031
 
@@ -326,11 +332,12 @@ emails the candidate's one-time portal link (`AIVA_CANDIDATE_PORTAL_URL` +
 `/questionnaire/{token}`) instead of the recruiter having to copy it out of
 the API response and send it manually.
 
-Not built: T-24h/T-1h interview reminder emails (would need a scheduler —
-the same gap the retention job's automation, ADR-029, already has) and a
-real transactional-email provider integration (SES/SendGrid/etc. — SMTP
-covers self-hosted or provider-SMTP-relay delivery, which is most of them,
-but not a dedicated API-based integration).
+T-24h/T-1h interview reminder emails are delivered by `POST
+/orgs/{id}/interview-reminders/run` (ADR-034, see the Scheduling section
+above) the same way booking confirmations are. Not built: a real
+transactional-email provider integration (SES/SendGrid/etc. — SMTP covers
+self-hosted or provider-SMTP-relay delivery, which is most of them, but not
+a dedicated API-based integration).
 
 `tests/test_email.py` covers both providers directly: `LogEmailProvider` via
 structlog's capture fixture, `SmtpEmailProvider` by mocking `smtplib.SMTP`
@@ -1147,9 +1154,10 @@ real Anthropic API unblocked it, and ADR-033 delivered it:
 invite and questionnaire-portal emails was deferred to Milestone 12's
 self-hosted mail server — ADR-031 delivered it earlier, via a pluggable
 `EmailProvider` (log stub by default, real SMTP via stdlib `smtplib`) rather
-than requiring a bundled mail server; reminder emails (T-24h/T-1h) still
-need a scheduler that doesn't exist yet, same gap as automated retention
-runs (ADR-029).
+than requiring a bundled mail server; T-24h/T-1h reminder emails were
+delivered afterward (ADR-034), via the same "expose an idempotent endpoint,
+let the deployer wire the schedule" shape as retention (ADR-029) rather than
+adding an in-process scheduler this codebase has no other precedent for.
 
 Milestone 8 (consent, device pre-check, adaptive STT/TTS interview loop,
 and the live candidate HUD), Milestone 9 (sandboxed live-coding workspace:
