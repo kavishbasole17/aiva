@@ -500,3 +500,44 @@ Rejected: building a candidate-facing self-service scheduling portal — the act
 revisited here), so a candidate booking UI would have needed a new, unreviewed
 backend authorization surface rather than just a missing frontend, out of scope for a
 UI-enablement pass.
+
+## ADR-027 — Cross-organization data leak in GET /requisitions/{id}/slots, found by a new integration test and fixed
+
+Context: while closing the scheduling-integration-test gap ADR-026/the README both
+named as still open, the new `test_integration_scheduling.py` was written to prove
+cross-org isolation the same way every other list/get endpoint in this codebase
+already does (a pattern this repo enforces consistently elsewhere — see ADR-002's
+RLS design and the M8/M11 "cross-org access returns 404" discipline already proven
+for auth, resume, and questionnaire endpoints). The test failed on its first real
+run against a live stack, not by inspection.
+Finding: `list_slots` (`app/routers_scheduling.py`, `GET /requisitions/{id}/slots`)
+never called `_load_requisition` (the org-scoping check its sibling endpoint
+`generate_requisition_slots` already used) or filtered by organization at all — it
+queried `InterviewSlot` by `requisition_id` alone. Any authenticated staff user, in
+any organization, could list any other organization's full interview slot schedule
+for a requisition whose UUID they had or could guess, including booked candidates'
+email addresses (`booked_for_email`) — a real cross-tenant PII leak, not a
+theoretical one, contradicting this codebase's own stated RLS/organization-isolation
+guarantees (ADR-002 and every "Milestone N proven: cross-org access denied" claim
+elsewhere in this document).
+Fix: one line — `await _load_requisition(db, user, requisition_id)` at the top of
+`list_slots`, matching the exact pattern already used by `generate_requisition_slots`
+two functions above it in the same file. Verified by `test_cross_org_scheduling_access_denied`
+in `test_integration_scheduling.py`: org B is now correctly denied (404) from
+generating, listing, or booking against org A's requisition/slots, re-run against a
+live stack after the fix (all 3 scheduling tests pass; the full domain-lifecycle
+integration suite was also re-run afterward with no other regressions — 29/31 pass,
+the 2 failures being the pre-existing, unrelated sandbox-runner anomaly).
+Consequences: this was a real, shipped vulnerability in the code this session
+inherited, not introduced by anything in this session's earlier commits — it predates
+ADR-024 through ADR-026 and would have shipped to Milestone 12 hardening undetected
+had this integration test not been written now. It was caught specifically because
+writing a *new* test forced writing the cross-org-denial assertion explicitly, rather
+than because of a broader security audit of already-existing endpoints — the same
+class of gap plausibly exists elsewhere in code that has never had an equivalent test
+written against it. A follow-up pass auditing every staff-role GET/POST endpoint for
+an explicit organization-scoping check (not just relying on RLS, which requires the
+session's `aiva.organization_id` to be bound correctly by `get_db` in the first place)
+is warranted before Milestone 12, not assumed unnecessary because "RLS should have
+caught it" — RLS is a second layer of defense here, not a substitute for the
+application-level check that was actually missing.

@@ -118,6 +118,7 @@ async def list_slots(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> dict[str, object]:
+    await _load_requisition(db, user, requisition_id)
     rows = (
         (
             await db.execute(
