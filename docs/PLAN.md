@@ -324,10 +324,17 @@ built on the existing DSAR erasure logic, dry-run by default, org-scoped, verifi
 against a live stack (ADR-029). Not built: the scheduler that would invoke it
 automatically (cron/systemd timer/K8s CronJob — an infrastructure choice for the
 deployment target, which doesn't exist yet since the Helm chart below doesn't either).
-Still fully open: load test, a real pen-test pass (a security review of new/changed
-code happened repeatedly throughout this session's work and found real issues each
-time — ADR-027, ADR-028 — but that is not the same thing as a dedicated penetration
-test of the whole system), Helm chart.
+**Load test (first pass)** — `scripts/load_test.py`, stdlib-only, run against a live
+instance with rate limiting disabled: ~190 req/s at concurrency 20 and ~290 req/s at
+concurrency 60 on a single-container dev-machine deployment, zero errors at either
+level, p99 latency climbing from ~100-400ms to ~550ms-1.6s between the two — see
+RUNBOOK.md's Load testing section for the full numbers and what this run does and
+does not establish (a first data point on one dev machine, not a production capacity
+number or a sustained-load result).
+Still fully open: a real pen-test pass (a security review of new/changed code happened
+repeatedly throughout this session's work and found real issues each time — ADR-027,
+ADR-028 — but that is not the same thing as a dedicated penetration test of the whole
+system), Helm chart.
 
 ## Known open items carried forward
 
