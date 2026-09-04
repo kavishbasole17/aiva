@@ -8,6 +8,7 @@ export {
   Button,
   Field,
   Input,
+  Select,
   Textarea,
   Card,
   Badge,

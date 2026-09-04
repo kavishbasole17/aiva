@@ -455,3 +455,48 @@ Rejected: encrypting `candidate_email` in this pass (breaks existing dedup/looku
 queries without a larger design change); a Redis-backed rate-limit store (unnecessary
 at this scale — `Limiter(storage_uri=...)` is a one-line swap if it's ever needed,
 same "interface now, harder backend later" pattern as ADR-017's STT/TTS/LLM backends).
+
+## ADR-026 — Recruiter/candidate UI for requisitions, job descriptions, resume upload, questionnaires, scheduling
+
+Context: by ADR-025, the backend supported the full hiring pipeline (JD → resume →
+score → questionnaire → schedule → interview → evaluate) with tested, working logic
+for every step, but the recruiter console only had UI for the pipeline/resume-detail/
+dashboard/sessions views — a recruiter could not create a job description, upload a
+resume, build a questionnaire, or generate interview slots without calling the API
+directly, and the candidate app had zero UI for questionnaires at all. This was the
+single largest gap between "backend capability exists" and "a user can actually do
+the thing."
+Decision: closed the gap end to end rather than partially. Two read endpoints were
+added purely because no list endpoint existed at all (`GET /orgs/{id}/departments`,
+`GET /orgs/{id}/requisitions`) — everything else already had a working create/get
+endpoint, this was strictly a UI-enablement gap, not a missing feature. Five new
+`apps/web-recruiter` pages (`Requisitions`, `RequisitionDetail`, `ResumeUpload`,
+`Questionnaire`, `Scheduling`) and one new `apps/web-candidate` page
+(`Questionnaire`, public token-gated) consume the existing and newly-added endpoints.
+No new design-system components beyond one (`Select`) were needed — the existing
+`Button`/`Card`/`Field`/`Input`/`Textarea`/`Badge`/`EmptyState`/`Skeleton` set from
+Milestone 1 covered every new page without modification, which is itself evidence the
+design system was already well-scoped, not under-built.
+Verification: the full new surface was exercised directly over HTTP against a freshly
+migrated live stack (register → department → requisition → JD → questionnaire →
+invite → public submit → response list → scheduling slots → resume upload → weight
+profile → scoring run → pipeline view), and the existing domain-lifecycle integration
+suite was re-run afterward (24/26 pass; the 2 failures are the pre-existing
+sandbox-runner anomaly tracked separately in `docs/PLAN.md`, not caused by this work).
+What was **not** verified: a live TypeScript compile of the two web apps, blocked by
+Windows-host/WSL2-filesystem tooling friction in this specific session (see the
+README's ADR-026 section for the exact failure modes tried) rather than by any known
+issue in the code itself. The new TSX was hand-reviewed against the existing files'
+own patterns instead, which caught two real bugs before commit (documented in the
+README section) — a real but weaker substitute for a compiler, disclosed as such
+rather than presented as equivalent verification.
+Consequences: the product's core promised flow (create JD → upload resumes → score →
+shortlist → questionnaire → schedule → interview) is now reachable end to end through
+the UI for the first time, not just through the API. A follow-up pass should run an
+actual `tsc`/`vite build` in a normal (non-cross-filesystem) environment before this
+ships to confirm no type errors slipped through hand-review.
+Rejected: building a candidate-facing self-service scheduling portal — the actual
+`POST /slots/{id}/book` endpoint is staff-only by design (ADR predates this one; not
+revisited here), so a candidate booking UI would have needed a new, unreviewed
+backend authorization surface rather than just a missing frontend, out of scope for a
+UI-enablement pass.

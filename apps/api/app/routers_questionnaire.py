@@ -99,6 +99,32 @@ async def create_questionnaire(
     return {"id": str(questionnaire.id), "question_count": len(body.questions)}
 
 
+@router.get("/requisitions/{requisition_id}/questionnaires")
+async def list_questionnaires(
+    requisition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    await _load_requisition(db, user, requisition_id)
+    rows = (
+        (
+            await db.execute(
+                select(Questionnaire)
+                .where(Questionnaire.requisition_id == requisition_id)
+                .order_by(Questionnaire.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "questionnaires": [
+            {"id": str(row.id), "title": row.title, "question_count": len(row.questions)}
+            for row in rows
+        ]
+    }
+
+
 class QuestionnaireClone(BaseModel):
     target_requisition_id: uuid.UUID
 
@@ -301,29 +327,25 @@ async def list_responses(
 ) -> dict[str, object]:
     await _load_requisition(db, user, requisition_id)
     rows = (
-        (
-            await db.execute(
-                select(QuestionnaireResponse)
-                .join(
-                    QuestionnaireInvite, QuestionnaireInvite.id == QuestionnaireResponse.invite_id
-                )
-                .join(Questionnaire, Questionnaire.id == QuestionnaireInvite.questionnaire_id)
-                .where(Questionnaire.requisition_id == requisition_id)
-                .order_by(QuestionnaireResponse.updated_at.desc())
-            )
+        await db.execute(
+            select(QuestionnaireResponse, QuestionnaireInvite.candidate_email)
+            .join(QuestionnaireInvite, QuestionnaireInvite.id == QuestionnaireResponse.invite_id)
+            .join(Questionnaire, Questionnaire.id == QuestionnaireInvite.questionnaire_id)
+            .where(Questionnaire.requisition_id == requisition_id)
+            .order_by(QuestionnaireResponse.updated_at.desc())
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     return {
         "responses": [
             {
                 "id": str(row.id),
+                "candidate_email": candidate_email,
                 "submitted": row.submitted,
                 "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
                 "missing_required": row.missing_required,
                 "history_entries": len(row.history),
+                "answers": row.answers,
             }
-            for row in rows
+            for row, candidate_email in rows
         ]
     }

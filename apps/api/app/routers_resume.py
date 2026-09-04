@@ -118,6 +118,26 @@ async def create_job_description(
     return {"id": str(jd.id), "title": jd.title}
 
 
+@router.get("/requisitions/{requisition_id}/job-description")
+async def get_job_description(
+    requisition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object] | None:
+    await _load_requisition(db, user, requisition_id)
+    jd = await _load_jd_for_resume(db, user, requisition_id)
+    if jd is None:
+        return None
+    return {
+        "id": str(jd.id),
+        "title": jd.title,
+        "raw_text": jd.raw_text,
+        "required_skills": jd.required_skills,
+        "preferred_skills": jd.preferred_skills,
+        "min_years_experience": jd.min_years_experience,
+    }
+
+
 async def _load_jd_for_resume(
     db: AsyncSession, user: User, requisition_id: uuid.UUID
 ) -> JobDescription | None:

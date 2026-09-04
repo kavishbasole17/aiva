@@ -546,7 +546,10 @@ Like the two integration tests before it, this one is not yet wired into
 `.github/workflows/ci.yml`'s `integration` job (still only
 `test_integration_readiness.py`) — it exists and passes when run manually.
 
-No frontend consumes any of this yet.
+No frontend consumed any of this at the time this section was written; a
+recruiter-facing questionnaire builder, invite flow, and response viewer, plus
+a candidate-facing fill-out page, now do — see "Recruiter console: requisitions,
+job descriptions, resume upload, questionnaires, scheduling" below.
 
 ## Recruiter console — Milestone 5
 
@@ -582,16 +585,87 @@ Milestone 1 design-system demo:
   what the frontend expects; this endpoint did not exist when the Milestone
   4 API was first documented above.
 
-Not yet done: no requisition-browsing UI (the pipeline page requires a
-requisition ID passed via URL query string today), no job-description or
-resume-upload UI (still API-only), no MFA prompt on login (noted directly in
-the login screen's own copy as "a later milestone"), and `apps/web-candidate`
-has not been touched — only the recruiter console has started consuming the
-real backend. Per `docs/PLAN.md`, also deliberately deferred within this
-milestone: Playwright end-to-end and accessibility (axe) test wiring, 60fps
-performance trace capture, Lighthouse audits, a command palette, and saved
-pipeline views — the latter two are treated as hardening-stage work for
-Milestones 11/12, not gaps in the current milestone.
+Requisition browsing, job-description, resume-upload, questionnaire, and
+scheduling UI were all built later (ADR-026, see the section below) — the gap
+noted at the time this milestone was first written no longer applies. Still
+not done: no MFA prompt on login (noted directly in the login screen's own
+copy as "a later milestone"). Per `docs/PLAN.md`, also deliberately deferred
+within this milestone: Playwright end-to-end and accessibility (axe) test
+wiring, 60fps performance trace capture, Lighthouse audits, a command
+palette, and saved pipeline views — the latter two are treated as
+hardening-stage work for Milestones 11/12, not gaps in the current milestone.
+
+## Recruiter console: requisitions, job descriptions, resume upload, questionnaires, scheduling (ADR-026)
+
+Closes the biggest remaining gap in the recruiter console: every domain
+capability below had working, tested backend logic with zero UI to reach it
+— a recruiter could not create a job description, upload a resume, build a
+questionnaire, or generate interview slots without calling the API directly.
+
+Two backend endpoints were added because no way existed to list existing
+records at all (only get-by-id): `GET /orgs/{id}/departments` and
+`GET /orgs/{id}/requisitions` (`app/routers_org.py`), plus
+`GET /requisitions/{id}/job-description` (latest version, `app/routers_resume.py`)
+and `GET /requisitions/{id}/questionnaires` (`app/routers_questionnaire.py`).
+`GET /requisitions/{id}/questionnaire-responses` was also extended to include
+`candidate_email` and `answers`, both previously omitted from the list
+response with no way to see who a response belonged to without a raw DB
+query.
+
+`apps/web-recruiter` gained five new pages: `Requisitions.tsx` (the new
+default landing route — lists departments/requisitions, creates both),
+`RequisitionDetail.tsx` (a requisition's hub: view/create the job
+description, navigate to every other page for that requisition),
+`ResumeUpload.tsx` (drag-and-drop multi-file upload against a requisition,
+then a "Score uploaded resumes" action that creates a default weight profile
+— technical 30 / experience 20 / domain 15 / education 10 / certifications 10
+/ soft_skills 10 / stability 5, matching `scoring.py`'s `DEFAULT_WEIGHTS` —
+and runs a scoring pass per resume), `Questionnaire.tsx` (a quick-start
+template covering notice period, salary expectations, work authorization,
+relocation, remote preference, a self-assessment rating, certifications,
+portfolio links, availability, and interview-time preference — matching the
+product spec's quick-start list — plus invite generation and a response
+list), and `Scheduling.tsx` (generate availability slots, list them, book one
+for a candidate, view the resulting `.ics` invite inline). `packages/ui`
+gained a `Select` component (native select, styled to match `Input`/`Textarea`)
+since none of the existing primitives covered a dropdown.
+
+`apps/web-candidate` gained a public, token-gated questionnaire page
+(`/questionnaire/:token`) — the only candidate-facing surface for
+questionnaires ADR yet had zero UI for. Renders each of the six question
+types (button groups for `yes_no`/`rating`/`multiple_choice`, text inputs for
+`short_text`/`long_text`), autosaves on a debounce, and surfaces the exact
+missing-required-question list the API returns on a rejected submit.
+
+Verified against a live stack, not just read: brought up the full compose
+stack fresh (`docker compose up --build`, migrations 0001→0013 applied),
+then exercised the entire new surface directly over HTTP with `curl` —
+register → login → create department → create requisition → list both →
+create job description → fetch it back → create questionnaire → invite →
+public fetch → public submit → staff response list (with the new
+`candidate_email` field populated correctly) → generate scheduling slots →
+list them → upload a resume → create a weight profile → run a scoring pass
+(round-tripping through the AES-256-GCM-encrypted `full_text`/extracted-field
+columns from ADR-025 transparently) → pipeline view showing the score. Every
+step returned the expected shape. The existing domain-lifecycle integration
+test suite was also re-run against the same live stack after these changes:
+24/26 pass (the 2 failures are the pre-existing sandbox-runner/Docker
+Desktop anomaly noted elsewhere in this document, unrelated to this work).
+
+**What could not be verified in this pass**: a live TypeScript compile/build
+of the two web apps. This session's environment (Windows host, project files
+on a WSL2 filesystem mount) hit tooling friction across every path tried —
+UNC-path-unaware `cmd.exe` subprocesses, a drive-letter workaround that then
+hit a stale pnpm store signature, and finally a resolved `vite` binary that
+Windows refused to execute — that a normal local or CI environment does not
+have. The new TSX was written directly against the existing files' own
+patterns and reviewed by hand (catching and fixing two real bugs before
+commit: a response-body parsing bug in the candidate questionnaire page that
+would have swallowed the missing-required-question list on a rejected
+submit, and an unnecessary `eslint-disable` that risked tripping an
+unused-directive lint rule) rather than compiler-verified. Run
+`pnpm install && pnpm --filter @aiva/web-recruiter --filter @aiva/web-candidate build`
+to confirm before relying on it in production.
 
 ## Design system (`packages/ui`) — Milestone 1
 

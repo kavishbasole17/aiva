@@ -2,6 +2,11 @@ import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { Button, useTheme } from "@aiva/ui";
 import { useAuth, signOut } from "./auth";
 import { LoginPage } from "./pages/Login";
+import { RequisitionsPage } from "./pages/Requisitions";
+import { RequisitionDetailPage } from "./pages/RequisitionDetail";
+import { ResumeUploadPage } from "./pages/ResumeUpload";
+import { QuestionnairePage } from "./pages/Questionnaire";
+import { SchedulingPage } from "./pages/Scheduling";
 import { CandidatesPage } from "./pages/Candidates";
 import { ResumeDetailPage } from "./pages/ResumeDetail";
 import { SessionsPage } from "./pages/Sessions";
@@ -33,12 +38,20 @@ function Shell({ children }: { children: React.ReactNode }) {
             <span className="hidden text-xs font-medium uppercase tracking-wide text-[var(--haze)] sm:inline">
               Recruiter Console
             </span>
-            <Link
-              to="/dashboard"
-              className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
-            >
-              Dashboard
-            </Link>
+            <nav className="hidden items-center gap-4 sm:flex">
+              <Link
+                to="/requisitions"
+                className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
+              >
+                Requisitions
+              </Link>
+              <Link
+                to="/dashboard"
+                className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
+              >
+                Dashboard
+              </Link>
+            </nav>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -75,6 +88,46 @@ export default function App() {
           }
         />
         <Route
+          path="/requisitions"
+          element={
+            <Protected>
+              <RequisitionsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/requisitions/:id"
+          element={
+            <Protected>
+              <RequisitionDetailPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/requisitions/:id/upload"
+          element={
+            <Protected>
+              <ResumeUploadPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/requisitions/:id/questionnaire"
+          element={
+            <Protected>
+              <QuestionnairePage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/requisitions/:id/scheduling"
+          element={
+            <Protected>
+              <SchedulingPage />
+            </Protected>
+          }
+        />
+        <Route
           path="/pipeline"
           element={
             <Protected>
@@ -106,7 +159,7 @@ export default function App() {
             </Protected>
           }
         />
-        <Route path="*" element={<Navigate to="/pipeline" replace />} />
+        <Route path="*" element={<Navigate to="/requisitions" replace />} />
       </Routes>
     </BrowserRouter>
   );

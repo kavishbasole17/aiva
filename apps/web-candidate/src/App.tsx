@@ -2,6 +2,7 @@ import { Badge, Button } from "@aiva/ui";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Interview from "./pages/Interview";
 import Join from "./pages/Join";
+import Questionnaire from "./pages/Questionnaire";
 import { useTheme } from "@aiva/ui";
 
 function ThemeToggle() {
@@ -29,7 +30,7 @@ export default function App() {
             <span className="text-sm text-[var(--haze)]">Candidate Portal</span>
           </div>
           <div className="flex items-center gap-3">
-            <Badge tone="neutral">Air-gapped session</Badge>
+            <Badge tone="neutral">Encrypted session</Badge>
             <ThemeToggle />
           </div>
         </header>
@@ -37,13 +38,14 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Join />} />
           <Route path="/interview" element={<Interview />} />
+          <Route path="/questionnaire/:token" element={<Questionnaire />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
 
         <footer className="mx-auto max-w-2xl px-6 pb-10 pt-4">
           <p className="text-center text-xs text-[var(--haze)]">
-            Your session runs entirely on this organization&apos;s infrastructure. No external
-            services are contacted at any point.
+            Your data is stored on this organization&apos;s infrastructure, with sensitive
+            fields encrypted at rest.
           </p>
         </footer>
       </div>
