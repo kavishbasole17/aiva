@@ -137,6 +137,26 @@ services:
       retries: 12
       start_period: 15s
 
+  web-recruiter:
+    build:
+      context: .
+      dockerfile: apps/web-recruiter/Dockerfile
+    ports:
+      - "15173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web-candidate:
+    build:
+      context: .
+      dockerfile: apps/web-candidate/Dockerfile
+    ports:
+      - "15174:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

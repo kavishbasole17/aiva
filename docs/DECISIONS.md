@@ -662,3 +662,65 @@ Rejected: giving retention its own redaction implementation independent of DSAR
 (the exact duplication this decision avoids); a fixed retention-days default
 (asserting a specific number as "correct" retention policy is a legal/product
 decision, not an engineering one).
+
+## ADR-030 — Helm chart (M12), plus containerizing the frontend for the first time
+
+Context: `docs/PLAN.md`'s M12 line item names a Helm chart as the last fully-open
+piece. Building it surfaced a prerequisite gap: `apps/web-recruiter` and
+`apps/web-candidate` had never been containerized at all — no Dockerfile, not even
+present in `compose.yaml` — local dev only ever ran them via `pnpm dev`. A Helm chart
+can't deploy images that don't exist, so this ADR covers both.
+Decision, frontend containerization: multi-stage Dockerfiles (`node:22-slim` build
+stage running the monorepo's own `pnpm --filter <app> run build` — verified working
+via ADR-026's earlier `tsc`/`vite build` fixes — into an `nginx:1.27-alpine` runtime
+stage). Build context must be the monorepo root, not the app subdirectory, since both
+apps depend on the `packages/ui` workspace package; a root `.dockerignore` was added
+(its absence broke the build outright — pnpm's workspace symlinks under
+`node_modules` produced an "invalid file request" from Docker's own context-transfer
+step, not a build error inside the Dockerfile). nginx serves the built static bundle
+with SPA fallback (`try_files ... /index.html`, needed for `react-router`'s
+client-side routes) and reverse-proxies `/api/` to a `${AIVA_API_UPSTREAM}` value
+substituted at container startup via nginx's own template-envsubst entrypoint feature
+— compose.yaml points it at `api:8000`, the Helm chart's Deployment env var points it
+at the in-cluster Service DNS name, same image both places. Both images and both
+proxies were verified for real: built, run, and hit with actual HTTP requests
+(`docker build` → `docker run` → `curl` returning the correct page title and, for the
+`/api/healthz` proxy specifically, the real backend's `{"status":"ok"}` response, not
+a mock). Also wired into `compose.yaml` as `web-recruiter`/`web-candidate` services —
+`docker compose up` now brings up the complete system including the UI, which it did
+not before tonight.
+Decision, Helm chart (`infra/helm/aiva`): Deployments for the five app-tier services
+(api, ai-gateway, sandbox-runner, web-recruiter, web-candidate — the latter two
+sharing one templated `range`-loop manifest since they're structurally identical),
+StatefulSets for the bundled Postgres/Redis/MinIO (explicitly documented in
+`values.yaml` and `NOTES.txt` as dev/evaluation-grade — no backup/HA story of their
+own, matching RUNBOOK.md's pre-existing "Backup & restore: pending M12" line rather
+than silently claiming to have solved it; a real deployment should point at managed
+services and disable these), a Secret with placeholder values that render successfully
+but are not usable secrets (same "no secrets in the repo" rule as ADR-005, restated
+for this new surface), an optional Ingress (disabled by default; deliberately routes
+only `web-recruiter` — `web-candidate` is a different trust boundary and needs an
+explicit host/path decision, not a default), and a NetworkPolicy scoping
+`sandbox-runner`'s pod to accepting traffic only from the api pod and sending none
+anywhere but DNS — defense in depth on top of its own per-execution `unshare --net`
+(ADR-019), not a replacement for it. `sandbox-runner`'s Deployment carries the same
+`CAP_SYS_ADMIN` grant ADR-028 added to `compose.yaml`, since the underlying `unshare
+--pid --net` requirement is identical in either environment. The Postgres
+`initdb` script is mounted from a chart-local copy of the exact same
+`infra/postgres/initdb/01_extensions.sql` compose.yaml uses — including, disclosed
+rather than silently carried over, that its `aiva_app` role password is a fixed
+dev-only literal in the SQL itself, not wired to this chart's `secrets.postgresAppPassword`
+value; a real deployment needs that fixed before relying on it.
+Verification: `helm lint` and `helm template` both pass, including with
+`ingress.enabled=true` and with the bundled data stores disabled (confirming the
+conditionals actually omit those StatefulSets rather than just looking like they
+would). Neither of those proves a real cluster deployment works — no Kubernetes
+cluster was available in the environment this was built in, so `helm install` itself
+was never run. Stated plainly in `NOTES.txt` and here rather than left to be
+discovered later: this is a validated-to-render, unvalidated-to-deploy chart. Treat
+it as a strong first draft for `helm install --dry-run` against a real cluster, not
+as already proven.
+Rejected: a single combined web-app image serving both apps behind one nginx config
+(the trust-boundary difference between the staff console and the public
+token-gated candidate app argued for keeping them fully separate images/Deployments,
+not a shared one with routing logic deciding which trust boundary a request lands in).

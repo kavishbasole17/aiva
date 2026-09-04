@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiva.fullname" . }}-api
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "api" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiva.componentLabels" (dict "component" "api" "Release" .Release) | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: api
+          image: {{ include "aiva.image" (dict "name" "api" "root" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.api.port }}
+          envFrom:
+            - secretRef:
+                name: {{ include "aiva.fullname" . }}-secrets
+          env:
+            - name: AIVA_DATABASE_URL
+              value: "postgresql+asyncpg://aiva_app:$(POSTGRES_APP_PASSWORD)@{{ include "aiva.fullname" . }}-postgres:5432/aiva"
+            - name: AIVA_ADMIN_DATABASE_URL
+              value: "postgresql+asyncpg://aiva:$(POSTGRES_PASSWORD)@{{ include "aiva.fullname" . }}-postgres:5432/aiva"
+            - name: AIVA_REDIS_URL
+              value: "redis://{{ include "aiva.fullname" . }}-redis:6379/0"
+            - name: AIVA_MINIO_ENDPOINT
+              value: "{{ include "aiva.fullname" . }}-minio:9000"
+            - name: AIVA_MINIO_ACCESS_KEY
+              value: "$(MINIO_ACCESS_KEY)"
+            - name: AIVA_MINIO_SECRET_KEY
+              value: "$(MINIO_SECRET_KEY)"
+            - name: AIVA_MINIO_BUCKET
+              value: "aiva-artifacts"
+            - name: AIVA_MINIO_SECURE
+              value: "false"
+            - name: AIVA_AI_GATEWAY_URL
+              value: "http://{{ include "aiva.fullname" . }}-ai-gateway:{{ .Values.aiGateway.port }}"
+            - name: AIVA_SANDBOX_URL
+              value: "http://{{ include "aiva.fullname" . }}-sandbox-runner:{{ .Values.sandboxRunner.port }}"
+            - name: AIVA_ENVIRONMENT
+              value: "production"
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.api.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: {{ .Values.api.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiva.fullname" . }}-api
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "api" "Release" .Release) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.api.port }}
+      targetPort: {{ .Values.api.port }}

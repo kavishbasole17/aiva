@@ -1,0 +1,47 @@
+{{- range $app := list (dict "key" "webRecruiter" "name" "web-recruiter") (dict "key" "webCandidate" "name" "web-candidate") }}
+{{- $cfg := index $.Values $app.key }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiva.fullname" $ }}-{{ $app.name }}
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" $app.name "Release" $.Release) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $app.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiva.componentLabels" (dict "component" $app.name "Release" $.Release) | nindent 8 }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+    spec:
+      containers:
+        - name: {{ $app.name }}
+          image: {{ include "aiva.image" (dict "name" $app.name "root" $) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ $cfg.port }}
+          env:
+            - name: AIVA_API_UPSTREAM
+              value: "http://{{ include "aiva.fullname" $ }}-api:{{ $.Values.api.port }}"
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiva.fullname" $ }}-{{ $app.name }}
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" $app.name "Release" $.Release) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: {{ $app.name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  ports:
+    - port: {{ $cfg.port }}
+      targetPort: {{ $cfg.port }}
+---
+{{- end }}

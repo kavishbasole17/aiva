@@ -317,7 +317,7 @@ milestone was called done (ADR-022). All quality gates green
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
+| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 — 3 of 4 have a first pass delivered; pen-test pass remains fully open |
 
 M12 progress: **retention jobs (core, delivered)** — `POST /orgs/{id}/retention/run`
 built on the existing DSAR erasure logic, dry-run by default, org-scoped, verified
@@ -331,10 +331,18 @@ level, p99 latency climbing from ~100-400ms to ~550ms-1.6s between the two — s
 RUNBOOK.md's Load testing section for the full numbers and what this run does and
 does not establish (a first data point on one dev machine, not a production capacity
 number or a sustained-load result).
+**Helm chart (first draft, delivered)** — `infra/helm/aiva`, covering all five
+app-tier services plus optional bundled Postgres/Redis/MinIO, Secret, Ingress, and a
+NetworkPolicy scoping sandbox-runner. Required containerizing the frontend for the
+first time (`apps/web-recruiter`/`apps/web-candidate` had no Dockerfile at all before
+this — see ADR-030), now also wired into `compose.yaml`. `helm lint`/`helm template`
+both pass, including with the bundled data stores toggled off — but no Kubernetes
+cluster was available to actually `helm install` against, so real-cluster deployment
+is unverified; treated and documented as such, not claimed as proven (ADR-030).
 Still fully open: a real pen-test pass (a security review of new/changed code happened
 repeatedly throughout this session's work and found real issues each time — ADR-027,
 ADR-028 — but that is not the same thing as a dedicated penetration test of the whole
-system), Helm chart.
+system).
 
 ## Known open items carried forward
 

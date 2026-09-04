@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiva.fullname" . }}-sandbox-runner
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "sandbox-runner" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.sandboxRunner.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox-runner
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiva.componentLabels" (dict "component" "sandbox-runner" "Release" .Release) | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: sandbox-runner
+          image: {{ include "aiva.image" (dict "name" "sandbox-runner" "root" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.sandboxRunner.port }}
+          securityContext:
+            # ADR-028: unshare --pid --net needs CAP_SYS_ADMIN, which no
+            # container runtime grants by default. Narrow, explicit grant --
+            # not privileged: true. The container still runs as root
+            # in-image specifically to setuid-drop per execution (ADR-019);
+            # this doesn't broaden that, it's what makes the isolation the
+            # code already assumes is available actually available.
+            capabilities:
+              add:
+                {{- toYaml .Values.sandboxRunner.capabilities | nindent 16 }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.sandboxRunner.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.sandboxRunner.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiva.fullname" . }}-sandbox-runner
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "sandbox-runner" "Release" .Release) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: sandbox-runner
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.sandboxRunner.port }}
+      targetPort: {{ .Values.sandboxRunner.port }}

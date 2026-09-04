@@ -1,0 +1,28 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Backend upstream is env-configurable (nginx official image's built-in
+    # entrypoint runs envsubst on templates/*.template into conf.d/*.conf at
+    # container startup) rather than baked into the image at build time --
+    # same host, different deployment targets: compose.yaml points this at
+    # `api:8000`, the Helm chart at the in-cluster Service DNS name.
+    location /api/ {
+        proxy_pass ${AIVA_API_UPSTREAM}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Client-side routed SPA (react-router) -- any unmatched path falls
+    # back to index.html rather than a raw 404.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer-when-downgrade always;
+}

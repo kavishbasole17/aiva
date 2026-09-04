@@ -1,0 +1,40 @@
+{{- if .Values.networkPolicy.enabled }}
+# Defense in depth on top of sandbox-runner's own per-execution network
+# isolation (unshare --net, ADR-019): the *pod* itself is confined to
+# accepting traffic only from the api pod on its own port, and to sending
+# no traffic anywhere. Candidate code's own network access is already
+# blocked at the kernel level per-execution regardless of this policy --
+# this stops the sandbox-runner *service process* itself (not candidate
+# code) from being a useful pivot point if it were ever compromised.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aiva.fullname" . }}-sandbox-runner
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "sandbox-runner" "Release" .Release) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox-runner
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: {{ .Values.sandboxRunner.port }}
+  egress:
+    # DNS only. No outbound egress to anywhere else, including the public
+    # internet -- this pod has no legitimate reason to initiate any
+    # connection at all.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
