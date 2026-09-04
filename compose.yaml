@@ -121,6 +121,16 @@ services:
       AIVA_MINIO_SECURE: "false"
       AIVA_LOG_LEVEL: INFO
       AIVA_ENVIRONMENT: ${AIVA_ENVIRONMENT:-development}
+      # Defaults to logging what would be sent (see app/email.py) -- zero
+      # setup, nothing actually delivered. Set AIVA_EMAIL_BACKEND=smtp plus
+      # the AIVA_EMAIL_SMTP_* vars in a local .env for real delivery.
+      AIVA_EMAIL_BACKEND: ${AIVA_EMAIL_BACKEND:-log}
+      AIVA_EMAIL_SMTP_HOST: ${AIVA_EMAIL_SMTP_HOST:-}
+      AIVA_EMAIL_SMTP_PORT: ${AIVA_EMAIL_SMTP_PORT:-587}
+      AIVA_EMAIL_SMTP_USERNAME: ${AIVA_EMAIL_SMTP_USERNAME:-}
+      AIVA_EMAIL_SMTP_PASSWORD: ${AIVA_EMAIL_SMTP_PASSWORD:-}
+      AIVA_EMAIL_FROM_ADDR: ${AIVA_EMAIL_FROM_ADDR:-no-reply@aiva.local}
+      AIVA_CANDIDATE_PORTAL_URL: ${AIVA_CANDIDATE_PORTAL_URL:-http://localhost:15174}
     ports:
       - "18000:8000"
     depends_on:

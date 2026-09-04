@@ -300,9 +300,43 @@ same RLS-enforced pattern as every other table, and `app/routers_scheduling.py`
   (rejecting with 409 if it's no longer open) and returns a ready-to-use
   `.ics` invite generated inline via `build_ics()`
 
-**Not yet done**: the `.ics` file is only returned in the API response — no
-email is actually sent. The "SMTP reminders" part of this milestone's scope
-(per `docs/PLAN.md`'s own milestone description) has not been built yet.
+**Update (ADR-031)**: `POST /slots/{id}/book` now also emails the `.ics`
+invite to the candidate via `app/email.py`'s pluggable provider (log-only by
+default — see the Email delivery section below), not just returning it in
+the API response. Still not built: T-24h/T-1h reminder emails (a scheduled
+job that doesn't exist yet, same "needs a scheduler" gap ADR-029's
+retention job has).
+
+## Email delivery (`apps/api`) — ADR-031
+
+`app/email.py` — pluggable outbound email, same mock-now/real-later precedent
+as every other external capability here (STT/TTS/LLM backends, ADR-017):
+`LogEmailProvider` (default) writes a structured log line for every email
+that *would* be sent instead of sending it — exactly the "log-based stub,
+swappable for a real provider later" the product spec called for, not a
+silent no-op. `SmtpEmailProvider` is a real implementation (stdlib
+`smtplib`, run in a thread so it never blocks the event loop) — genuinely
+sends mail given real SMTP credentials (`AIVA_EMAIL_BACKEND=smtp` plus the
+`AIVA_EMAIL_SMTP_*` settings), not another mock.
+
+Wired into the two places the product spec named: `POST /slots/{id}/book`
+now emails the `.ics` confirmation to the candidate (previously only
+returned in the API response), and `POST /questionnaires/{id}/invites`
+emails the candidate's one-time portal link (`AIVA_CANDIDATE_PORTAL_URL` +
+`/questionnaire/{token}`) instead of the recruiter having to copy it out of
+the API response and send it manually.
+
+Not built: T-24h/T-1h interview reminder emails (would need a scheduler —
+the same gap the retention job's automation, ADR-029, already has) and a
+real transactional-email provider integration (SES/SendGrid/etc. — SMTP
+covers self-hosted or provider-SMTP-relay delivery, which is most of them,
+but not a dedicated API-based integration).
+
+`tests/test_email.py` covers both providers directly: `LogEmailProvider` via
+structlog's capture fixture, `SmtpEmailProvider` by mocking `smtplib.SMTP`
+(asserting the real `starttls`/`login`/`send_message` call sequence and
+message content, including the `.ics` attachment — no real network
+connection or SMTP server needed to prove the code is correct).
 
 ## Interview sessions (`apps/api`, `services/ai-gateway`, `apps/web-candidate`) — Milestone 8 (core, mock-verified)
 

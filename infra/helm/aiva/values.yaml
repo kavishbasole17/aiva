@@ -90,6 +90,20 @@ ingress:
     enabled: false
     secretName: ""
 
+email:
+  # Defaults to logging what would be sent (app/email.py) rather than
+  # actually delivering anything -- zero setup, nothing sent. Set to "smtp"
+  # and fill in the rest (plus secrets.emailSmtpUsername/Password) for real
+  # delivery.
+  backend: log
+  smtpHost: ""
+  smtpPort: 587
+  fromAddr: no-reply@aiva.local
+  # Used to build the candidate-facing link in questionnaire invite emails
+  # -- point this at wherever web-candidate is actually reachable
+  # (a real domain if ingress.enabled, otherwise the Service's own address).
+  candidatePortalUrl: "http://localhost:15174"
+
 # Real values MUST be supplied via a separate, non-committed values file or
 # --set-file / external-secrets-operator in any real deployment (ADR-005's
 # "no secrets in the repo" rule applies here exactly as it does to
@@ -103,6 +117,8 @@ secrets:
   postgresAppPassword: "REPLACE_ME"
   minioAccessKey: "REPLACE_ME"
   minioSecretKey: "REPLACE_ME"
+  emailSmtpUsername: ""
+  emailSmtpPassword: ""
 
 networkPolicy:
   # Confines sandbox-runner's pod-to-pod traffic to nothing (it already

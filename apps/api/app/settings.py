@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     refresh_token_days: int = 14
     log_level: str = "INFO"
     environment: str = "development"
+    email_backend: str = "log"
+    email_smtp_host: str = ""
+    email_smtp_port: int = 587
+    email_smtp_username: str = ""
+    email_smtp_password: str = ""
+    email_from_addr: str = "no-reply@aiva.local"
+    email_smtp_use_tls: bool = True
+    candidate_portal_url: str = "http://localhost:15174"
 
     @field_validator("encryption_key")
     @classmethod

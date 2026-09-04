@@ -24,3 +24,6 @@ infra/helm/aiva/templates/*.tpl::http://\{\{
 packages/ui/src/components.tsx::xmlns=
 scripts/seed_demo_account.sh::http://localhost
 services/sandbox-runner/tests/conftest.py::http://testserver
+apps/api/app/settings.py::http://localhost:15174
+compose.yaml::http://localhost:15174
+infra/helm/aiva/values.yaml::http://localhost:15174

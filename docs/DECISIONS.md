@@ -724,3 +724,46 @@ Rejected: a single combined web-app image serving both apps behind one nginx con
 (the trust-boundary difference between the staff console and the public
 token-gated candidate app argued for keeping them fully separate images/Deployments,
 not a shared one with routing logic deciding which trust boundary a request lands in).
+
+## ADR-031 — Pluggable email delivery, wired into booking and questionnaire invites
+
+Context: the product spec explicitly asked for "an email interface with a log-based
+stub implementation, swappable for a real provider later" for interview booking
+confirmations, and this repo's own docs (README's Scheduling section, `docs/PLAN.md`'s
+M7 entry) had carried "no email is actually sent" as an open gap since that
+milestone was built — the `.ics` invite was only ever returned in the API response,
+and questionnaire invite links only ever returned as raw API response fields the
+recruiter would have to copy out and send manually.
+Decision: `apps/api/app/email.py` adds an `EmailProvider` interface with two
+implementations, same mock-now/real-later shape as every other external capability in
+this codebase (ADR-017's STT/TTS/LLM backends). `LogEmailProvider` (default,
+`AIVA_EMAIL_BACKEND=log`) writes a structured log line for every email that would be
+sent — satisfying the spec's explicit "log-based stub" ask directly, not glossed over
+as "email not implemented." `SmtpEmailProvider` (`AIVA_EMAIL_BACKEND=smtp`) is a real
+implementation using stdlib `smtplib` (no new dependency), running the synchronous
+send in a thread (`asyncio.to_thread`) so it never blocks the event loop — genuinely
+sends mail given real credentials, not another mock. Wired into the two places the
+spec named: `POST /slots/{id}/book` (interview booking confirmation, `.ics`
+attached) and `POST /questionnaires/{id}/invites` (the candidate's one-time portal
+link, built from a new `AIVA_CANDIDATE_PORTAL_URL` setting rather than hardcoded).
+Verified: `tests/test_email.py` covers both providers directly — `LogEmailProvider`
+via structlog's capture fixture, `SmtpEmailProvider` by mocking `smtplib.SMTP`
+(asserting the real `starttls`/`login`/`send_message` call sequence, message
+headers, plain-text body content via `EmailMessage.get_body()`, and the `.ics`
+attachment's filename — not just that a function was called, but that the message
+it built is correct). The existing scheduling and questionnaire integration test
+suites were re-run against a live stack after wiring this in: both still pass in
+full (no regression from adding a dependency neither test suite explicitly exercises
+the content of, since both still just check the HTTP-level behavior the log backend
+doesn't change).
+Consequences: this closes a specific, long-standing, explicitly-named gap rather than
+a general "add email" feature — reminder emails (T-24h/T-1h, named in M7's original
+scope) still need a scheduler that doesn't exist yet (same gap as ADR-029's retention
+job automation), and a dedicated transactional-email-provider integration (SES,
+SendGrid, etc., as opposed to SMTP relay) is a real, separate follow-up if an
+organization's mail infrastructure doesn't speak SMTP.
+Rejected: bundling a self-hosted mail server (Postfix) into `compose.yaml`, which
+`docs/PLAN.md`'s original M7 entry had scoped this deferral around — unnecessary complexity
+for a feature that stdlib `smtplib` against any real SMTP host/relay already covers;
+a self-hosted MTA is an infrastructure decision for the deploying organization, not
+something this repo should assume or provide.

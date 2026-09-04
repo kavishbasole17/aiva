@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_event
-from app.deps import get_db, require_roles
+from app.deps import get_db, get_email_provider, require_roles
+from app.email import EmailProvider
 from app.models import (
     Department,
     Questionnaire,
@@ -30,12 +31,6 @@ from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["questionnaires"])
-
-
-def get_app_settings_days() -> int:
-    from app.settings import get_settings
-
-    return get_settings().invite_token_days
 
 
 EDIT_ROLES = (Role.ADMIN.value, Role.HIRING_MANAGER.value, Role.RECRUITER.value)
@@ -179,14 +174,18 @@ async def create_invite(
     body: InviteCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*EDIT_ROLES)),
+    email: EmailProvider = Depends(get_email_provider),
 ) -> dict[str, object]:
+    from app.settings import get_settings
+
     questionnaire = (
         await db.execute(select(Questionnaire).where(Questionnaire.id == questionnaire_id))
     ).scalar_one_or_none()
     if questionnaire is None or questionnaire.organization_id != user.organization_id:
         raise HTTPException(status_code=404, detail="Questionnaire not found")
 
-    days = get_app_settings_days()
+    settings = get_settings()
+    days = settings.invite_token_days
 
     raw, digest = generate_invite_token()
     invite = QuestionnaireInvite(
@@ -206,6 +205,16 @@ async def create_invite(
         actor_id=user.id,
         organization_id=user.organization_id,
         payload={"candidate_email": invite.candidate_email},
+    )
+    portal_link = f"{settings.candidate_portal_url}/questionnaire/{raw}"
+    await email.send(
+        to=invite.candidate_email,
+        subject=f"{questionnaire.title} — action needed",
+        body=(
+            f"You've been invited to complete a short questionnaire: {questionnaire.title}.\n\n"
+            f"{portal_link}\n\n"
+            f"This link expires in {days} days and can only be used once."
+        ),
     )
     return {
         "invite_id": str(invite.id),

@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.db import create_session_factory
+from app.email import build_email_provider
 from app.health import Dependencies, setup_dependencies
 from app.health import router as health_router
 from app.logging_setup import configure_logging
@@ -43,6 +44,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.deps = await setup_dependencies(settings)
     app.state.session_factory = create_session_factory(settings)
+    app.state.email = build_email_provider(
+        settings.email_backend,
+        settings.email_smtp_host,
+        settings.email_smtp_port,
+        settings.email_smtp_username,
+        settings.email_smtp_password,
+        settings.email_from_addr,
+        settings.email_smtp_use_tls,
+    )
     # Rate limiting is a shared, process-wide in-memory counter (see
     # app/rate_limit.py). Disabled only for `environment=test`, where many
     # separate test app instances share one Python process/counter within a

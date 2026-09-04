@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_event
-from app.deps import get_db, require_roles
+from app.deps import get_db, get_email_provider, require_roles
+from app.email import EmailProvider
 from app.ics import build_ics
 from app.models import InterviewSlot, Role, User
 from app.scheduling import AvailabilityRule, generate_slots
@@ -150,6 +151,7 @@ async def book_slot(
     body: BookingRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*STAFF_ROLES)),
+    email: EmailProvider = Depends(get_email_provider),
 ) -> dict[str, object]:
     slot = (
         await db.execute(select(InterviewSlot).where(InterviewSlot.id == slot_id))
@@ -179,5 +181,15 @@ async def book_slot(
         end_utc=slot.end_at,
         organizer_email=user.email,
         attendee_email=slot.booked_for_email or "",
+    )
+    await email.send(
+        to=slot.booked_for_email or "",
+        subject="Your AIVA interview is confirmed",
+        body=(
+            f"Your interview is confirmed for {slot.start_at.isoformat()} "
+            f"(UTC) to {slot.end_at.isoformat()} (UTC). "
+            "The attached calendar invite has the details."
+        ),
+        attachment=(f"aiva-interview-{slot.id}.ics", ics.encode("utf-8")),
     )
     return {"id": str(slot.id), "status": slot.status, "ics": ics}

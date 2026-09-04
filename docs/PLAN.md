@@ -112,9 +112,12 @@ with proper escaping and UTC formatting replaces any calendar API per §3. Booki
 endpoint flips slot status with conflict rejection and emits the invite file.
 All 7 CI jobs green.
 
-Deferred within M7: SMTP delivery of `.ics` invites and T-24h/T-1h reminders
-(requires self-hosted Postfix in compose — wired at M12 hardening), candidate-facing
-self-select UI (arrives with portal), interviewer-per-slot caps.
+Deferred within M7 originally, since delivered (ADR-031): email delivery of `.ics`
+invites via a pluggable provider (`app/email.py` — log-only by default, real SMTP
+opt-in), no self-hosted Postfix required (stdlib `smtplib` against any real SMTP
+host/relay instead). Still deferred: T-24h/T-1h reminders (needs a scheduler, same
+gap ADR-029's retention job has), candidate-facing self-select UI (the actual booking
+endpoint is staff-only by design, ADR-026), interviewer-per-slot caps.
 
 ### Milestone 8 (core) — Interview sessions: consent, device pre-check, adaptive STT/TTS loop, HUD
 

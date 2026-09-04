@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import bind_rls_context
+from app.email import EmailProvider
 from app.models import User
 from app.settings import Settings
 
@@ -17,6 +18,11 @@ bearer_scheme = HTTPBearer(auto_error=False)
 def get_app_settings(request: Request) -> Settings:
     settings: Settings = request.app.state.settings
     return settings
+
+
+def get_email_provider(request: Request) -> EmailProvider:
+    provider: EmailProvider = request.app.state.email
+    return provider
 
 
 def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:

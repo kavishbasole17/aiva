@@ -48,6 +48,26 @@ spec:
               value: "http://{{ include "aiva.fullname" . }}-sandbox-runner:{{ .Values.sandboxRunner.port }}"
             - name: AIVA_ENVIRONMENT
               value: "production"
+            - name: AIVA_EMAIL_BACKEND
+              value: {{ .Values.email.backend | quote }}
+            - name: AIVA_EMAIL_SMTP_HOST
+              value: {{ .Values.email.smtpHost | quote }}
+            - name: AIVA_EMAIL_SMTP_PORT
+              value: {{ .Values.email.smtpPort | quote }}
+            - name: AIVA_EMAIL_SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aiva.fullname" . }}-secrets
+                  key: EMAIL_SMTP_USERNAME
+            - name: AIVA_EMAIL_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aiva.fullname" . }}-secrets
+                  key: EMAIL_SMTP_PASSWORD
+            - name: AIVA_EMAIL_FROM_ADDR
+              value: {{ .Values.email.fromAddr | quote }}
+            - name: AIVA_CANDIDATE_PORTAL_URL
+              value: {{ .Values.email.candidatePortalUrl | quote }}
           livenessProbe:
             httpGet: { path: /healthz, port: {{ .Values.api.port }} }
             initialDelaySeconds: 5
