@@ -1,0 +1,13 @@
+# Without this, a Windows checkout (git's core.autocrlf=true default there)
+# silently converts these to CRLF line endings, which breaks them in ways
+# that don't announce themselves: a CRLF shebang line makes direct
+# execution (`./script.sh`) fail with a confusing "No such file or
+# directory" naming the interpreter-plus-\r, and a CRLF-terminated
+# `set -euo pipefail` line fails with "pipefail: invalid option name" --
+# found the hard way, verifying infra/helm/aiva and the Docker/compose
+# changes in ADR-030 required actually running scripts/check_no_egress.sh,
+# which wouldn't run at all on this checkout until this was fixed.
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf
+*.conf.template text eol=lf

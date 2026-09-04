@@ -14,3 +14,13 @@ services/ai-gateway/tests/conftest.py::http://testserver
 compose.yaml::http://ai-gateway:9100
 .env.example::http://localhost
 apps/*/vite.config.ts::http://localhost
+compose.yaml::http://sandbox-runner:9200
+apps/web-recruiter/Dockerfile::http://api:8000
+apps/web-candidate/Dockerfile::http://api:8000
+scripts/load_test.py::http://localhost:18000
+infra/helm/aiva/templates/*.yaml::http://\{\{
+infra/helm/aiva/templates/*.tpl::http://\{\{
+.github/workflows/ci.yml::http://localhost:19200
+packages/ui/src/components.tsx::xmlns=
+scripts/seed_demo_account.sh::http://localhost
+services/sandbox-runner/tests/conftest.py::http://testserver
