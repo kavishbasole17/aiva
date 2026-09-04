@@ -549,3 +549,75 @@ session's `aiva.organization_id` to be bound correctly by `get_db` in the first 
 is warranted before Milestone 12, not assumed unnecessary because "RLS should have
 caught it" — RLS is a second layer of defense here, not a substitute for the
 application-level check that was actually missing.
+
+## ADR-028 — Three real bugs behind sandbox-runner's code execution failures, found and fixed
+
+Context: every prior live-stack verification this session ran (README's ADR-026
+section, ADR-027) hit the same 2 failing tests — `test_integration_workspace.py`
+and `test_integration_evaluation.py` — with sandboxed code execution returning
+`exit_code=1`/empty stdout via a 200 response. This was logged three separate times
+as an "environment-specific anomaly... unconfirmed as a root cause," on the working
+theory that Docker Desktop's WSL2 backend behaved differently from the native Linux
+kernel `ubuntu-latest` CI runs on. That theory was never actually tested — it was a
+plausible-sounding excuse not to dig further, made three times in a row. Digging in
+instead found three real, unrelated bugs, none of them Docker-Desktop-specific.
+
+**Bug 1 — missing `CAP_SYS_ADMIN`.** `unshare --map-root-user --net --pid --fork`,
+called directly inside the running `sandbox-runner` container, failed outright:
+`unshare: unshare failed: Operation not permitted`. Docker's default capability set
+excludes `CAP_SYS_ADMIN`; creating new namespaces needs it (or, in principle, a
+kernel that permits the unprivileged-user-namespace path `--map-root-user` relies on
+to work without it — evidently not available here, whatever the reason). `compose.yaml`
+never granted it. Fixed with `cap_add: [SYS_ADMIN]` on the `sandbox-runner` service —
+a narrow, standard grant (not `privileged: true`), and the service already runs as
+root in-container specifically to setuid-drop per execution (ADR-019), so this adds
+no privilege the container didn't already effectively need for its own stated design
+to function at all.
+
+**Bug 2 — a `PATH` that doesn't match the base image.** With Bug 1 fixed, Python
+executions still failed: `unshare: failed to execute python3: No such file or
+directory`. `_run_sync`'s subprocess `env` hardcoded `PATH=/usr/bin:/bin`; the
+service's own `python:3.11-slim` base image installs `python3` at `/usr/local/bin`.
+Confirmed directly (`which python3` inside the container: `/usr/local/bin/python3`;
+`/usr/bin/python3` does not exist). Fixed by adding `/usr/local/bin` first in the
+allowlisted `PATH` — still a fixed, minimal list, not the real environment's PATH.
+
+**Bug 3 — `RLIMIT_AS` capped 6x too low for Node, from an unused field.**
+`_SubprocessExecutor.__init__` already computed `self._rlimit_as_bytes` (768MB for
+JS, deliberately larger than the 128MB `--max-old-space-size` heap cap, because V8
+reserves substantially more virtual address space at startup than its heap limit)
+— but `_run_sync`'s `preexec()` closure called `_apply_rlimits(cpu_seconds,
+self._memory_bytes, ...)`, passing the 128MB heap-size field for the OS-level
+`RLIMIT_AS` instead of the 768MB field computed for exactly that purpose. Every
+Node execution's V8 startup mmap calls hit the 128MB ceiling, and Node hung until
+the wall-clock timeout — 100% reproducible, every single call, not intermittent.
+Confirmed directly by testing 128MB against 768MB in isolation (same isolation
+prefix, same privilege drop, only the AS limit changed): 128MB hangs indefinitely
+under `timeout 3`, 768MB completes in ~100ms. `_apply_rlimits` gained an explicit
+`rlimit_as_bytes` parameter so this class of unused-field bug can't silently recur;
+the call site now passes `self._rlimit_as_bytes`. Python is unaffected (it never
+set `settings_rlimit_as_mb` separately, so its "wrong" and "right" values were
+already identical — this is exactly why Python executions worked throughout while
+Node's failed 100% of the time, and why earlier hand-testing with manually-typed
+768MB values always succeeded: every ad-hoc reproduction attempt happened to use
+the correct value directly rather than going through the buggy code path).
+
+None of these three bugs were introduced this session — `sandbox-runner` predates
+tonight entirely. All three are real, were shipping, and would have hit any operator
+running this exact `compose.yaml` on any Docker host, not just this one.
+Verification: with all three fixes applied, the complete domain-lifecycle
+integration suite (auth, resume, questionnaire, scheduling, interview, workspace,
+faq, evaluation, m11 — 33 tests) passes in full against a freshly migrated live
+stack, for the first time this session. `sandbox-runner`'s own quality gate
+(ruff, black, mypy --strict, bandit with its documented `skips` config) stays green.
+Consequences: "it's probably an environment difference" is not a root cause, and
+this ADR exists partly as a record of that specific failure of nerve, not just the
+fix — the actual bugs took under two hours to find with direct `docker compose
+exec` probing once actually looked for, after three separate write-ups treating the
+symptom as unconfirmable. `services/sandbox-runner`'s own hermetic unit test suite
+(`test_executors.py`, `test_sandbox.py`) was not re-verified in this pass when run
+directly on the bare WSL host outside the container (it hits unrelated
+resource-exhaustion errors specific to lacking the container's dedicated
+`sandbox0..31` accounts and `CAP_SYS_ADMIN` context) — the live containerized
+integration path is the one that matters for the actual deployment shape and is
+what was verified.

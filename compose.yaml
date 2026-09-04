@@ -84,6 +84,14 @@ services:
   sandbox-runner:
     build:
       context: ./services/sandbox-runner
+    # Required for `unshare --pid --net` (candidate-code isolation, ADR-019)
+    # to actually create namespaces. The service process runs as root inside
+    # the container regardless (ADR-019, to setuid-drop per execution) — this
+    # doesn't broaden that; it's what lets the isolation mechanism the code
+    # already assumed was available actually work under Docker's default
+    # (deliberately narrow) capability set, which excludes CAP_SYS_ADMIN.
+    cap_add:
+      - SYS_ADMIN
     ports:
       - "19200:9200"
     healthcheck:
