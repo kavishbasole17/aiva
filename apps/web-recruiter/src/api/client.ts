@@ -245,8 +245,29 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
-export function login(email: string, password: string): Promise<LoginResponse> {
-  return postJson<LoginResponse>("/auth/login", { email, password });
+export function login(
+  email: string,
+  password: string,
+  totpCode?: string,
+): Promise<LoginResponse> {
+  return postJson<LoginResponse>("/auth/login", {
+    email,
+    password,
+    ...(totpCode ? { totp_code: totpCode } : {}),
+  });
+}
+
+export interface MfaEnrollResponse {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export function enrollMfa(): Promise<MfaEnrollResponse> {
+  return postJson("/auth/mfa/enroll", {});
+}
+
+export function activateMfa(code: string): Promise<{ status: string }> {
+  return postJson("/auth/mfa/activate", { code });
 }
 
 export interface CurrentUser {

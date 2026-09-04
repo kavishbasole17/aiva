@@ -767,3 +767,41 @@ Rejected: bundling a self-hosted mail server (Postfix) into `compose.yaml`, whic
 for a feature that stdlib `smtplib` against any real SMTP host/relay already covers;
 a self-hosted MTA is an infrastructure decision for the deploying organization, not
 something this repo should assume or provide.
+
+## ADR-032 — MFA frontend, closing a gap the login screen had been naming since Milestone 2
+
+Context: `app/auth_service.py`/`app/routers_auth.py` have shipped complete TOTP MFA
+(enroll, activate, and login gating — `POST /auth/login` already rejected
+password-only login once `mfa_enabled` was set, requiring `totp_code`) since
+Milestone 2. The recruiter console's login screen had, since it was first built,
+carried its own copy directly stating "MFA-protected accounts will be prompted for a
+code in a later milestone" — a real, self-documented gap, not an oversight nobody
+noticed.
+Decision: `Login.tsx` now handles the `401` response `POST /auth/login` returns when
+a code is missing or wrong — distinguished by the backend's own error detail text
+("TOTP code required" vs. "Invalid TOTP code"), since both cases share the same
+status code — revealing a code-entry step instead of just showing a generic
+sign-in failure. A new `/security` page (`MfaSetup.tsx`) drives the
+enroll-then-activate flow: calls `POST /auth/mfa/enroll`, displays the returned
+secret as a manually-enterable key (no QR-code library added — out of scope for
+what this gap actually needed, and copy-paste-a-secret is the standard authenticator
+fallback path every app supports anyway, not a lesser one) plus the raw `otpauth://`
+URI behind a `<details>` toggle for anyone who wants to build a QR code themselves,
+then collects the 6-digit confirmation code and calls `POST /auth/mfa/activate`.
+Verification: the complete lifecycle was run against a live stack end to end with
+real TOTP codes computed via `pyotp` (the same library the backend itself uses) —
+register → login (pre-MFA) → enroll → activate with a valid code → login without a
+code correctly rejected (401) → login with a deliberately wrong code correctly
+rejected ("Invalid TOTP code") → login with a fresh valid code correctly succeeds
+(200, real token pair) — not assumed from reading the code. `tsc --noEmit`, `vite
+build`, and `eslint` all pass with zero errors on the new/changed frontend files, and
+the existing `test_integration_auth.py` (which already covered the backend MFA flow)
+was re-run afterward with no regressions.
+Consequences: MFA is now something a recruiter/admin/hiring-manager account can
+actually turn on and use through the UI, not just through direct API calls -- closing
+a specifically-named, long-carried gap rather than a general "auth polish" pass.
+Rejected: adding a QR-code-rendering library for the enrollment screen -- the
+manual-secret-entry path this ships is already how every authenticator app expects
+to support accounts that can't be scanned, and pulling in a new frontend dependency
+for a convenience the flow doesn't strictly need wasn't worth the audit-surface cost
+(ADR-007's "dependencies land on first use, not speculatively" precedent).

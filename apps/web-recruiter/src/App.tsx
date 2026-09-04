@@ -12,6 +12,7 @@ import { ResumeDetailPage } from "./pages/ResumeDetail";
 import { SessionsPage } from "./pages/Sessions";
 import { InterviewSessionDetailPage } from "./pages/InterviewSessionDetail";
 import { DashboardPage } from "./pages/Dashboard";
+import { MfaSetupPage } from "./pages/MfaSetup";
 
 function ThemeToggle() {
   const { theme, toggle } = useTheme();
@@ -50,6 +51,12 @@ function Shell({ children }: { children: React.ReactNode }) {
                 className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
               >
                 Dashboard
+              </Link>
+              <Link
+                to="/security"
+                className="text-sm text-[var(--haze)] hover:text-[var(--signal-text)]"
+              >
+                Security
               </Link>
             </nav>
           </div>
@@ -156,6 +163,14 @@ export default function App() {
           element={
             <Protected>
               <InterviewSessionDetailPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/security"
+          element={
+            <Protected>
+              <MfaSetupPage />
             </Protected>
           }
         />

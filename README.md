@@ -621,13 +621,17 @@ Milestone 1 design-system demo:
 
 Requisition browsing, job-description, resume-upload, questionnaire, and
 scheduling UI were all built later (ADR-026, see the section below) — the gap
-noted at the time this milestone was first written no longer applies. Still
-not done: no MFA prompt on login (noted directly in the login screen's own
-copy as "a later milestone"). Per `docs/PLAN.md`, also deliberately deferred
-within this milestone: Playwright end-to-end and accessibility (axe) test
-wiring, 60fps performance trace capture, Lighthouse audits, a command
-palette, and saved pipeline views — the latter two are treated as
-hardening-stage work for Milestones 11/12, not gaps in the current milestone.
+noted at the time this milestone was first written no longer applies. The MFA
+login gap noted here too has since been closed (ADR-032): the login screen
+now prompts for a 6-digit code when the backend's `/auth/login` response
+indicates one is required, and a new `/security` page drives the
+enroll-then-activate flow, both consuming MFA endpoints that had existed on
+the backend since Milestone 2 with no frontend ever built for them. Per
+`docs/PLAN.md`, still deliberately deferred within this milestone: Playwright
+end-to-end and accessibility (axe) test wiring, 60fps performance trace
+capture, Lighthouse audits, a command palette, and saved pipeline views — the
+latter two are treated as hardening-stage work for Milestones 11/12, not gaps
+in the current milestone.
 
 ## Recruiter console: requisitions, job descriptions, resume upload, questionnaires, scheduling (ADR-026)
 
