@@ -188,6 +188,7 @@ jobs:
           pytest tests/test_integration_resume.py
           pytest tests/test_integration_questionnaire.py
           pytest tests/test_integration_scheduling.py
+          pytest tests/test_integration_retention.py
           pytest tests/test_integration_interview.py
           pytest tests/test_integration_workspace.py
           pytest tests/test_integration_faq.py

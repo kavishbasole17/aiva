@@ -286,19 +286,14 @@ class DsarEraseRequest(BaseModel):
     confirm: bool
 
 
-@router.post("/dsar/erase")
-async def erase_candidate_data(
-    body: DsarEraseRequest,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles(*DSAR_ROLES)),
-) -> dict[str, object]:
-    if not body.confirm:
-        raise HTTPException(status_code=400, detail="confirm must be true to proceed")
+def _apply_erasure(records: dict[str, list[Any]]) -> dict[str, int]:
+    """Redact every PII-bearing field on an already-loaded record set.
 
-    records = await _find_candidate_records(db, user.organization_id, body.email)
-    if not any(records.values()):
-        raise HTTPException(status_code=404, detail="No records found for this email")
-
+    Shared by the manual admin-triggered `/dsar/erase` endpoint and the
+    automated retention job (`routers_retention.py`) — same redaction
+    logic, same "overwrite in place, never delete the row" discipline,
+    two different ways of deciding *which* candidate to apply it to.
+    """
     for resume in records["resumes"]:
         resume.candidate_email = None
         resume.full_text = REDACTED
@@ -330,8 +325,23 @@ async def erase_candidate_data(
             message.author_label = REDACTED
     for evaluation in records["evaluations"]:
         evaluation.payload = {**evaluation.payload, "candidate_email": REDACTED}
+    return _record_counts(records)
 
-    counts = _record_counts(records)
+
+@router.post("/dsar/erase")
+async def erase_candidate_data(
+    body: DsarEraseRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*DSAR_ROLES)),
+) -> dict[str, object]:
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true to proceed")
+
+    records = await _find_candidate_records(db, user.organization_id, body.email)
+    if not any(records.values()):
+        raise HTTPException(status_code=404, detail="No records found for this email")
+
+    counts = _apply_erasure(records)
     await record_event(
         db,
         action="dsar.erased",

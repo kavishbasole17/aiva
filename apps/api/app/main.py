@@ -22,6 +22,7 @@ from app.routers_interview import router as interview_router
 from app.routers_org import router as org_router
 from app.routers_questionnaire import router as questionnaire_router
 from app.routers_resume import router as resume_router
+from app.routers_retention import router as retention_router
 from app.routers_scheduling import router as scheduling_router
 from app.routers_workspace import router as workspace_router
 from app.security_headers import SecurityHeadersMiddleware
@@ -78,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(faq_router)
     app.include_router(evaluation_router)
     app.include_router(dsar_router)
+    app.include_router(retention_router)
     app.include_router(dashboard_router)
     app.include_router(audit_router)
     return app

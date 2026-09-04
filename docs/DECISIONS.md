@@ -621,3 +621,44 @@ resource-exhaustion errors specific to lacking the container's dedicated
 `sandbox0..31` accounts and `CAP_SYS_ADMIN` context) — the live containerized
 integration path is the one that matters for the actual deployment shape and is
 what was verified.
+
+## ADR-029 — Data retention job (M12), built on the existing DSAR erasure logic
+
+Context: `docs/PLAN.md`'s M12 line item names "retention jobs" as the one remaining
+core milestone. Retention (auto-purging candidate data past a policy window) and
+DSAR erasure (purging one named candidate's data on request) are the same operation
+— redact the same PII-bearing fields, the same "overwrite in place, never delete the
+row" discipline — differing only in *how the candidate is selected* (a named email
+vs. an age cutoff), so duplicating the redaction logic would have been a real
+maintenance hazard (the exact "two places to keep in sync" pattern the M11 DSAR work
+itself flagged, ADR-022's `source_quote` miss). Decision: extracted `_apply_erasure`
+from `routers_dsar.py`'s `/dsar/erase` handler into a shared function, and
+`routers_retention.py`'s new `POST /orgs/{id}/retention/run` calls it against
+whichever candidates its own eligibility query selects.
+Policy scope, stated plainly rather than left implicit (per this module's own
+docstring): eligibility is based on `ResumeDocument.created_at` age only,
+per-request-configurable `retention_days` (no fixed default asserted as legally
+correct for any jurisdiction — that's the operating organization's call, not this
+codebase's). It does not model "is this candidate still in an active pipeline" —
+an operator relying on this for real compliance needs to confirm that separately
+before running it for real. `dry_run` (default true, returns the exact candidate
+list and count without touching anything) exists specifically to make that check
+possible before anything destructive happens; `max_candidates` (default 500) bounds
+a single call's blast radius.
+Not built, and explicitly out of scope for this pass: an actual scheduler (cron,
+systemd timer, Kubernetes CronJob) invoking this endpoint automatically. The
+endpoint is designed to be trivially wired into any of those (a single authenticated
+POST), but choosing and configuring one is an infrastructure decision for the
+deployment target, which this repo doesn't have yet (M12's Helm chart is also still
+open) — building a scheduler around a policy this codebase can't fully validate
+(the active-pipeline gap above) would be premature.
+Verified: `test_integration_retention.py` proves dry-run non-mutation, real-run
+erasure + idempotency (a second run against already-redacted candidates finds
+nothing left to do), a far-future cutoff finding nothing, and cross-organization
+denial (403) — against a live stack, all 4 tests passing. The full domain-lifecycle
+integration suite (37 tests, every file including this one) was re-run afterward
+with no regressions.
+Rejected: giving retention its own redaction implementation independent of DSAR
+(the exact duplication this decision avoids); a fixed retention-days default
+(asserting a specific number as "correct" retention policy is a legal/product
+decision, not an engineering one).

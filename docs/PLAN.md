@@ -319,6 +319,16 @@ milestone was called done (ADR-022). All quality gates green
 |---|---|---|
 | M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
 
+M12 progress: **retention jobs (core, delivered)** — `POST /orgs/{id}/retention/run`
+built on the existing DSAR erasure logic, dry-run by default, org-scoped, verified
+against a live stack (ADR-029). Not built: the scheduler that would invoke it
+automatically (cron/systemd timer/K8s CronJob — an infrastructure choice for the
+deployment target, which doesn't exist yet since the Helm chart below doesn't either).
+Still fully open: load test, a real pen-test pass (a security review of new/changed
+code happened repeatedly throughout this session's work and found real issues each
+time — ADR-027, ADR-028 — but that is not the same thing as a dedicated penetration
+test of the whole system), Helm chart.
+
 ## Known open items carried forward
 
 - Docker Desktop (Windows host, WSL2 backend) is available and the full compose
