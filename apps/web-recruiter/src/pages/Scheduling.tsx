@@ -20,7 +20,7 @@ const STATUS_TONE: Record<string, "positive" | "neutral" | "warning"> = {
 };
 
 export function SchedulingPage() {
-  const { id: requisitionId } = useParams();
+  const { id: routeRequisitionId } = useParams();
   const [slots, setSlots] = useState<InterviewSlotSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -48,24 +48,25 @@ export function SchedulingPage() {
   }
 
   useEffect(() => {
-    if (!requisitionId) return;
+    if (!routeRequisitionId) return;
     let cancelled = false;
-    refresh(requisitionId).catch((cause: unknown) => {
+    refresh(routeRequisitionId).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : "Failed to load");
     });
     return () => {
       cancelled = true;
     };
-  }, [requisitionId]);
+  }, [routeRequisitionId]);
 
-  if (!requisitionId) return null;
+  if (!routeRequisitionId) return null;
+  const requisitionId = routeRequisitionId;
 
   async function submitGenerate(event: React.FormEvent) {
     event.preventDefault();
     setGenerating(true);
     setError(null);
     try {
-      await generateSlots(requisitionId!, {
+      await generateSlots(requisitionId, {
         date_from: dateFrom,
         date_to: dateTo,
         timezone_name: timezone,
@@ -75,7 +76,7 @@ export function SchedulingPage() {
         buffer_minutes: buffer,
         include_weekends: false,
       });
-      await refresh(requisitionId!);
+      await refresh(requisitionId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to generate slots");
     } finally {
@@ -92,7 +93,7 @@ export function SchedulingPage() {
       setLastIcs(result.ics);
       setBookingEmail("");
       setBookingSlot(null);
-      await refresh(requisitionId!);
+      await refresh(requisitionId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to book slot");
     } finally {

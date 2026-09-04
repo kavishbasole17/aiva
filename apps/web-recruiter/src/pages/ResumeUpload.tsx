@@ -32,13 +32,14 @@ const VERDICT_TONE: Record<string, "positive" | "accent" | "warning" | "negative
 };
 
 export function ResumeUploadPage() {
-  const { id: requisitionId } = useParams();
+  const { id: routeRequisitionId } = useParams();
   const [rows, setRows] = useState<FileRow[]>([]);
   const [scoringAll, setScoringAll] = useState(false);
   const [scoringError, setScoringError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  if (!requisitionId) return null;
+  if (!routeRequisitionId) return null;
+  const requisitionId = routeRequisitionId;
 
   function addFiles(fileList: FileList | null) {
     if (!fileList) return;
@@ -47,13 +48,13 @@ export function ResumeUploadPage() {
   }
 
   async function uploadAll() {
-    for (let index = 0; index < rows.length; index += 1) {
-      if (rows[index].status !== "pending") continue;
+    for (const [index, row] of rows.entries()) {
+      if (row.status !== "pending") continue;
       setRows((existing) =>
-        existing.map((row, i) => (i === index ? { ...row, status: "uploading" } : row)),
+        existing.map((r, i) => (i === index ? { ...r, status: "uploading" } : r)),
       );
       try {
-        const result = await uploadResume(requisitionId, rows[index].file);
+        const result = await uploadResume(requisitionId, row.file);
         setRows((existing) =>
           existing.map((row, i) =>
             i === index ? { ...row, status: "uploaded", resumeId: result.id } : row,
@@ -86,14 +87,14 @@ export function ResumeUploadPage() {
         hold_below: 50,
         highly_recommended_at: 85,
       });
-      for (let index = 0; index < rows.length; index += 1) {
-        const row = rows[index];
+      for (const [index, row] of rows.entries()) {
         if (row.status !== "uploaded" || !row.resumeId) continue;
+        const resumeId = row.resumeId;
         setRows((existing) =>
           existing.map((r, i) => (i === index ? { ...r, status: "scoring" } : r)),
         );
         try {
-          const result = await runScoring(requisitionId, row.resumeId, profile.id);
+          const result = await runScoring(requisitionId, resumeId, profile.id);
           setRows((existing) =>
             existing.map((r, i) =>
               i === index

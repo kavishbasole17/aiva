@@ -50,7 +50,7 @@ const QUICK_START_TEMPLATE: QuestionnaireQuestion[] = [
 ];
 
 export function QuestionnairePage() {
-  const { id: requisitionId } = useParams();
+  const { id: routeRequisitionId } = useParams();
   const [questionnaires, setQuestionnaires] = useState<QuestionnaireSummary[] | null>(null);
   const [responses, setResponses] = useState<QuestionnaireResponseSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,24 +72,25 @@ export function QuestionnairePage() {
   }
 
   useEffect(() => {
-    if (!requisitionId) return;
+    if (!routeRequisitionId) return;
     let cancelled = false;
-    refresh(requisitionId).catch((cause: unknown) => {
+    refresh(routeRequisitionId).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : "Failed to load");
     });
     return () => {
       cancelled = true;
     };
-  }, [requisitionId]);
+  }, [routeRequisitionId]);
 
-  if (!requisitionId) return null;
+  if (!routeRequisitionId) return null;
+  const requisitionId = routeRequisitionId;
 
   async function createFromTemplate() {
     setCreating(true);
     setError(null);
     try {
-      await createQuestionnaire(requisitionId!, "Candidate Questionnaire", QUICK_START_TEMPLATE);
-      await refresh(requisitionId!);
+      await createQuestionnaire(requisitionId, "Candidate Questionnaire", QUICK_START_TEMPLATE);
+      await refresh(requisitionId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to create questionnaire");
     } finally {
@@ -107,7 +108,7 @@ export function QuestionnairePage() {
       setLastInviteLink(link);
       setInviteEmail("");
       setInviteFor(null);
-      await refresh(requisitionId!);
+      await refresh(requisitionId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to send invite");
     } finally {

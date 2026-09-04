@@ -483,18 +483,26 @@ invite → public submit → response list → scheduling slots → resume uploa
 profile → scoring run → pipeline view), and the existing domain-lifecycle integration
 suite was re-run afterward (24/26 pass; the 2 failures are the pre-existing
 sandbox-runner anomaly tracked separately in `docs/PLAN.md`, not caused by this work).
-What was **not** verified: a live TypeScript compile of the two web apps, blocked by
-Windows-host/WSL2-filesystem tooling friction in this specific session (see the
-README's ADR-026 section for the exact failure modes tried) rather than by any known
-issue in the code itself. The new TSX was hand-reviewed against the existing files'
-own patterns instead, which caught two real bugs before commit (documented in the
-README section) — a real but weaker substitute for a compiler, disclosed as such
-rather than presented as equivalent verification.
+Update (same session, later): the live TypeScript compile this ADR originally called
+out as unverified was subsequently unblocked by installing a user-local Node.js
+binary directly inside the WSL2 distro (no root, a plain tarball extract) and running
+`pnpm` entirely on that side of the filesystem boundary, instead of bridging Windows
+and WSL2 as every earlier attempt had. `tsc --noEmit` then found 8 real errors from
+`noUncheckedIndexedAccess` (all in `ResumeUpload.tsx`'s upload/scoring loops, fixed by
+iterating `.entries()` instead of indexing) and `eslint` found 6 more
+(`@typescript-eslint/no-non-null-assertion` violations from `requisitionId!` in two
+pages, fixed by rebinding to a fresh `const` after the guard — confirmed, not assumed,
+that narrowing does not propagate into the nested closures this code used). Both apps
+now pass `tsc --noEmit`, `vite build`, and `eslint` with zero errors, and both
+production builds were served locally and confirmed to return correct HTML. Full
+details and the exact fixes are in the README's ADR-026 section. The hand-review
+pass this ADR originally relied on caught two real, different bugs the compiler
+does not catch (a response-parsing bug, an unnecessary eslint-disable) — both classes
+of check turned out to matter, not just the one that was eventually available.
 Consequences: the product's core promised flow (create JD → upload resumes → score →
 shortlist → questionnaire → schedule → interview) is now reachable end to end through
-the UI for the first time, not just through the API. A follow-up pass should run an
-actual `tsc`/`vite build` in a normal (non-cross-filesystem) environment before this
-ships to confirm no type errors slipped through hand-review.
+the UI for the first time, not just through the API, and is compiler-and-linter-verified,
+not just hand-reviewed.
 Rejected: building a candidate-facing self-service scheduling portal — the actual
 `POST /slots/{id}/book` endpoint is staff-only by design (ADR predates this one; not
 revisited here), so a candidate booking UI would have needed a new, unreviewed

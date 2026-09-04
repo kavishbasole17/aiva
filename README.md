@@ -652,20 +652,46 @@ test suite was also re-run against the same live stack after these changes:
 24/26 pass (the 2 failures are the pre-existing sandbox-runner/Docker
 Desktop anomaly noted elsewhere in this document, unrelated to this work).
 
-**What could not be verified in this pass**: a live TypeScript compile/build
-of the two web apps. This session's environment (Windows host, project files
-on a WSL2 filesystem mount) hit tooling friction across every path tried —
-UNC-path-unaware `cmd.exe` subprocesses, a drive-letter workaround that then
-hit a stale pnpm store signature, and finally a resolved `vite` binary that
-Windows refused to execute — that a normal local or CI environment does not
-have. The new TSX was written directly against the existing files' own
-patterns and reviewed by hand (catching and fixing two real bugs before
-commit: a response-body parsing bug in the candidate questionnaire page that
-would have swallowed the missing-required-question list on a rejected
-submit, and an unnecessary `eslint-disable` that risked tripping an
-unused-directive lint rule) rather than compiler-verified. Run
-`pnpm install && pnpm --filter @aiva/web-recruiter --filter @aiva/web-candidate build`
-to confirm before relying on it in production.
+**Update — now verified**: the live TypeScript compile/build this section
+originally flagged as unverified (blocked by Windows-host/WSL2-filesystem
+tooling friction: UNC-path-unaware `cmd.exe` subprocesses, a drive-letter
+workaround that hit a stale pnpm store signature, a resolved `vite` binary
+Windows refused to execute) was unblocked by installing a user-local Node.js
+binary directly inside the WSL2 distro (no `sudo`, no system package
+manager — a tarball extracted to `~/.local/node`) and running `pnpm` fully
+natively there instead of bridging Windows and WSL2 filesystems. That single
+change — do the whole toolchain on one side of the filesystem boundary —
+is what the earlier attempts were missing.
+
+With a real compiler available, `tsc --noEmit` on `apps/web-recruiter`
+surfaced 8 genuine type errors from this repo's `noUncheckedIndexedAccess`
+strict-mode flag (`packages/ui`'s `tsconfig.json`, predating this session):
+array-index access like `rows[index]` types as possibly-`undefined`, not the
+element type. All were in `ResumeUpload.tsx`'s upload/scoring loops — fixed
+by iterating `rows.entries()` instead of indexing, which gives a properly
+narrowed element with no assertion needed. `eslint` then caught a second,
+independent issue: six uses of `requisitionId!` (in `Questionnaire.tsx` and
+`Scheduling.tsx`) violated this repo's `@typescript-eslint/no-non-null-assertion`
+rule — non-null assertions compile fine but are banned here since they can
+silently hide a real `undefined` at runtime. Fixed by rebinding the
+`useParams()` value to a fresh `const` after the component's own
+`if (!id) return null` guard, which both the compiler and linter accept
+as genuinely narrowed (the hand-reviewed original code had relied on
+narrowing propagating into nested closures, which — confirmed here against a
+real compiler, not assumed — it does not for this pattern). Every one of
+these was a real bug, not a style nit: an unguarded `undefined` reaching
+`fetch()` would throw at runtime exactly when a recruiter clicked the
+affected button.
+
+`apps/web-recruiter` and `apps/web-candidate` both now pass `tsc --noEmit`,
+`vite build` (production bundle, fonts and all), and `eslint` with zero
+errors. Both production builds were also served locally (`vite preview`)
+and confirmed to return real HTML with the correct page titles — not just
+"the bundler didn't crash." The two bugs caught by hand-review before any of
+this (the candidate-questionnaire response-parsing bug and the unnecessary
+`eslint-disable`) were real too — compiler + linter verification and careful
+hand-review caught different, non-overlapping classes of bug here, which is
+itself worth noting rather than assuming either alone would have been enough.
 
 ## Design system (`packages/ui`) — Milestone 1
 
