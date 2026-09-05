@@ -1,0 +1,9 @@
+# Force LF line endings for all text files regardless of a checkout's local
+# core.autocrlf setting. Without this, a Windows checkout with the common
+# `core.autocrlf=true` default silently rewrites every text file (including
+# scripts/check_no_egress.sh's shell-script inputs and its own
+# infra/egress_allowlist.txt) to CRLF, which breaks that script's regex
+# matching against every allowlist rule at once -- a false result the script
+# gives no indication of, discovered while verifying this change locally on
+# Windows.
+* text=auto eol=lf

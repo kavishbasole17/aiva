@@ -309,10 +309,41 @@ milestone was called done (ADR-022). All quality gates green
 |---|---|---|
 | M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
 
+### Milestone 12 progress — retention jobs (partial; load test/pen-test/Helm chart not started)
+
+`app/dsar_service.py` extracts the candidate-record lookup and PII erasure logic
+`routers_dsar.py` already had (behavior-preserving refactor, existing DSAR tests
+unchanged) so it can be driven by more than one trigger. `app/retention.py` adds
+`run_retention_sweep()`: age-based erasure using that same logic — a candidate is
+swept only once every known record (resume, questionnaire invite, interview
+session, evaluation report) predates a cutoff, computed from whichever of those
+is *most* recent (`latest_activity_at()`), not each row's own age. `POST
+/retention/run` (admin-only, same role gate as `/dsar/*`) exposes it, with a new
+`AIVA_RETENTION_DAYS` setting (default 730) and a per-call override for a
+tighter one-off sweep. See ADR-024 for why this reuses DSAR's erasure path
+instead of a new deletion mechanism, and why the trigger is a manual/admin
+endpoint rather than a schedule — no worker or Helm CronJob exists yet to hang
+a clock off. `test_retention_unit.py` covers `latest_activity_at()`'s "most
+recent wins" logic directly; `test_integration_retention.py` proves the sweep
+end-to-end against the live stack (a stale candidate is erased, a fresh one is
+exempt under the default window, non-admin is rejected) and is wired into the
+CI integration job alongside `test_integration_m11.py`.
+Not started within M12: load testing, the pen-test pass, and the Helm chart.
+
 ## Known open items carried forward
 
-- Local Docker Engine install in WSL pending operator action; compose stack is
-  proven via CI integration job meanwhile.
+- Local Docker Desktop is now confirmed working on the developer's Windows/WSL
+  machine (previously only proven via the CI integration job): `docker compose
+  up -d` for postgres/redis/minio/ai-gateway/sandbox-runner, `alembic upgrade
+  head`, `uvicorn app.main:app` for the API, and `npm run dev` for both
+  frontend apps all run and talk to each other locally end-to-end (verified
+  while building the M12 retention slice above). One environment-specific
+  wrinkle, not a project issue: pnpm's Windows shim cannot run with a UNC
+  (`\\wsl.localhost\...`) working directory, so `pnpm install` and both
+  frontend dev servers were run from a native path inside the WSL distro
+  instead (a portable Linux Node.js toolchain under `~/.local`, since the
+  distro's own Node was missing and `pacman` needs an interactive sudo
+  password) — this doesn't affect CI or a normal single-OS dev setup.
 - Coverage thresholds and golden-set content begin at M4 when scoring logic exists.
 - MinIO server-side encryption wires into KES/Vault at production hardening (ADR-008).
 

@@ -339,3 +339,30 @@ purpose. Scope creep into an unimplementable-responsibly demographic audit or an
 unbacked ML proctoring mock would have cost more (in false confidence, and in the
 compliance risk of pretending to check something the system has no data to check) than
 the narrower, honest versions shipped here.
+
+## ADR-024 — Retention jobs drive the existing DSAR erasure path by age, not a new deletion mechanism
+
+Context: M12 needs automated data retention (erase candidate PII once it's aged past
+policy) without inventing a second, parallel notion of "erase a candidate's data" next
+to the manual DSAR erasure ADR-022 already established, and without a scheduler
+component (ARQ worker, Helm CronJob) existing yet to actually trigger it on a clock.
+Decision: `routers_dsar.py`'s erase loop and record-lookup were extracted into
+`dsar_service.py` (`find_candidate_records`/`apply_erasure`, behavior-preserving refactor)
+so `retention.py`'s `run_retention_sweep` can reuse the exact same redaction code a manual
+DSAR request uses — age-triggered erasure is not a new deletion path, it's the same one
+with a different trigger. A candidate is swept only once *every* known record
+(resume/invite/session/evaluation) predates the cutoff — `latest_activity_at()` takes the
+max, not the min, across record kinds, so one recent interaction (e.g. a resume
+re-upload against a new requisition) keeps the whole candidate exempt, matching what
+"delete my data N days after my last interaction" should mean rather than purging each
+row N days after its own creation. The trigger itself is deliberately left as an
+admin-invoked endpoint (`POST /retention/run`, admin-only, same `DSAR_ROLES` gate,
+`AIVA_RETENTION_DAYS` default with a per-call override) rather than wired to a scheduler
+— there is no ARQ worker or Helm CronJob to hang a clock off yet (`services/worker` is
+still an empty scaffold, and the Helm chart itself is a separate M12 line item), so this
+ships the correct, tested erasure *logic* now and leaves "run this on a schedule" as an
+ops concern for whichever of those two lands first, with no call-site change required
+when it does.
+Consequences: until a scheduler exists, retention is not actually automatic — an admin
+(or an external cron calling the endpoint with a service account) must trigger it. This
+is stated plainly rather than left implied by the milestone name "retention jobs."

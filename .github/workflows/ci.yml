@@ -187,6 +187,7 @@ jobs:
           pytest tests/test_integration_faq.py
           pytest tests/test_integration_evaluation.py
           pytest tests/test_integration_m11.py
+          pytest tests/test_integration_retention.py
       - name: Golden-set eval against gateway
         working-directory: packages/eval
         env:

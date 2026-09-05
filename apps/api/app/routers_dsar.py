@@ -25,148 +25,36 @@ payloads that embed literal resume quotes further downstream
 scoring pipeline from the same source text) are not deep-redacted by this
 pass. A future pass would need to walk those payloads' embedded
 source_quote/rationale strings too.
+
+`POST /retention/run` (M12) drives the same erasure logic automatically,
+without a specific candidate email, against every candidate whose most
+recent activity in this organization predates a retention cutoff — see
+`retention.py`.
 """
 
 import hashlib
-import uuid
-from typing import Any
+from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_event
-from app.deps import get_db, require_roles
-from app.models import (
-    CodeExecution,
-    CodeSnapshot,
-    CodingTask,
-    DiscussionMessage,
-    EvaluationReport,
-    ExtractedFieldRow,
-    InterviewConsent,
-    InterviewSession,
-    InterviewTurn,
-    Questionnaire,
-    QuestionnaireInvite,
-    QuestionnaireResponse,
-    ResumeDocument,
-    Role,
-    User,
-    WhiteboardStroke,
+from app.deps import get_app_settings, get_db, require_roles
+from app.dsar_service import (
+    apply_erasure,
+    find_candidate_records,
+    questionnaire_titles_for,
+    record_counts,
 )
+from app.models import Role, User, utcnow
+from app.retention import run_retention_sweep
+from app.settings import Settings
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["dsar"])
 
 DSAR_ROLES = (Role.ADMIN.value,)
-REDACTED = "[redacted per DSAR erasure request]"
-PII_FIELD_NAMES = frozenset({"email", "phone", "name", "full_name", "linkedin"})
-
-
-async def _all(db: AsyncSession, stmt: Any) -> list[Any]:
-    return list((await db.execute(stmt)).scalars().all())
-
-
-async def _find_candidate_records(
-    db: AsyncSession, organization_id: uuid.UUID, email: str
-) -> dict[str, list[Any]]:
-    normalized = email.strip().lower()
-
-    resumes = await _all(
-        db,
-        select(ResumeDocument).where(
-            ResumeDocument.organization_id == organization_id,
-            func.lower(ResumeDocument.candidate_email) == normalized,
-        ),
-    )
-    resume_ids = [r.id for r in resumes]
-
-    fields = (
-        await _all(db, select(ExtractedFieldRow).where(ExtractedFieldRow.resume_id.in_(resume_ids)))
-        if resume_ids
-        else []
-    )
-
-    invites = await _all(
-        db,
-        select(QuestionnaireInvite).where(
-            QuestionnaireInvite.organization_id == organization_id,
-            func.lower(QuestionnaireInvite.candidate_email) == normalized,
-        ),
-    )
-    invite_ids = [i.id for i in invites]
-    responses = (
-        await _all(
-            db, select(QuestionnaireResponse).where(QuestionnaireResponse.invite_id.in_(invite_ids))
-        )
-        if invite_ids
-        else []
-    )
-
-    sessions = await _all(
-        db,
-        select(InterviewSession).where(
-            InterviewSession.organization_id == organization_id,
-            func.lower(InterviewSession.candidate_email) == normalized,
-        ),
-    )
-    session_ids = [s.id for s in sessions]
-
-    async def _by_session(model: Any) -> list[Any]:
-        if not session_ids:
-            return []
-        return await _all(db, select(model).where(model.session_id.in_(session_ids)))
-
-    turns = await _by_session(InterviewTurn)
-    consents = await _by_session(InterviewConsent)
-    tasks = await _by_session(CodingTask)
-    task_ids = [t.id for t in tasks]
-    snapshots = (
-        await _all(db, select(CodeSnapshot).where(CodeSnapshot.task_id.in_(task_ids)))
-        if task_ids
-        else []
-    )
-    executions = (
-        await _all(db, select(CodeExecution).where(CodeExecution.task_id.in_(task_ids)))
-        if task_ids
-        else []
-    )
-    strokes = await _by_session(WhiteboardStroke)
-    messages = await _by_session(DiscussionMessage)
-
-    evaluations = (
-        await _all(
-            db,
-            select(EvaluationReport).where(
-                EvaluationReport.organization_id == organization_id,
-                EvaluationReport.resume_id.in_(resume_ids),
-            ),
-        )
-        if resume_ids
-        else []
-    )
-
-    return {
-        "resumes": resumes,
-        "fields": fields,
-        "invites": invites,
-        "responses": responses,
-        "sessions": sessions,
-        "turns": turns,
-        "consents": consents,
-        "tasks": tasks,
-        "snapshots": snapshots,
-        "executions": executions,
-        "strokes": strokes,
-        "messages": messages,
-        "evaluations": evaluations,
-    }
-
-
-def _record_counts(records: dict[str, list[Any]]) -> dict[str, int]:
-    return {name: len(rows) for name, rows in records.items()}
 
 
 class DsarExportRequest(BaseModel):
@@ -185,25 +73,12 @@ async def export_candidate_data(
     # otherwise careful to keep it out of (the audit event below only ever
     # stores its SHA-256 hash). Matches DsarEraseRequest's shape below.
     email = body.email
-    records = await _find_candidate_records(db, user.organization_id, email)
+    records = await find_candidate_records(db, user.organization_id, email)
 
     if not any(records.values()):
         raise HTTPException(status_code=404, detail="No records found for this email")
 
-    questionnaire_titles: dict[uuid.UUID, str] = {}
-    if records["invites"]:
-        questionnaires = (
-            (
-                await db.execute(
-                    select(Questionnaire).where(
-                        Questionnaire.id.in_([i.questionnaire_id for i in records["invites"]])
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        questionnaire_titles = {q.id: q.title for q in questionnaires}
+    questionnaire_titles = await questionnaire_titles_for(db, records["invites"])
 
     await record_event(
         db,
@@ -215,7 +90,7 @@ async def export_candidate_data(
             "candidate_email_sha256": hashlib.sha256(
                 email.strip().lower().encode("utf-8")
             ).hexdigest(),
-            "record_counts": _record_counts(records),
+            "record_counts": record_counts(records),
         },
     )
 
@@ -277,7 +152,7 @@ async def export_candidate_data(
         "evaluation_reports": [
             {"overall_score": e.overall_score, "verdict": e.verdict} for e in records["evaluations"]
         ],
-        "record_counts": _record_counts(records),
+        "record_counts": record_counts(records),
     }
 
 
@@ -295,43 +170,11 @@ async def erase_candidate_data(
     if not body.confirm:
         raise HTTPException(status_code=400, detail="confirm must be true to proceed")
 
-    records = await _find_candidate_records(db, user.organization_id, body.email)
+    records = await find_candidate_records(db, user.organization_id, body.email)
     if not any(records.values()):
         raise HTTPException(status_code=404, detail="No records found for this email")
 
-    for resume in records["resumes"]:
-        resume.candidate_email = None
-        resume.full_text = REDACTED
-        resume.filename = REDACTED
-    for field in records["fields"]:
-        if field.field_name in PII_FIELD_NAMES:
-            field.value = REDACTED
-            field.source_quote = REDACTED
-    for invite in records["invites"]:
-        invite.candidate_email = f"redacted-{invite.id.hex}@invalid.example"
-    for response in records["responses"]:
-        response.answers = {}
-        response.history = []
-    for session in records["sessions"]:
-        session.candidate_email = f"redacted-{session.id.hex}@invalid.example"
-    for turn in records["turns"]:
-        if turn.answer_text is not None:
-            turn.answer_text = REDACTED
-    for snapshot in records["snapshots"]:
-        snapshot.source = REDACTED
-    for execution in records["executions"]:
-        execution.source = REDACTED
-        execution.stdin = REDACTED
-        execution.stdout = REDACTED
-        execution.stderr = REDACTED
-    for message in records["messages"]:
-        if message.author == "candidate":
-            message.body = REDACTED
-            message.author_label = REDACTED
-    for evaluation in records["evaluations"]:
-        evaluation.payload = {**evaluation.payload, "candidate_email": REDACTED}
-
-    counts = _record_counts(records)
+    counts = apply_erasure(records)
     await record_event(
         db,
         action="dsar.erased",
@@ -347,6 +190,39 @@ async def erase_candidate_data(
     )
     await db.flush()
     return {"erased": True, "record_counts": counts}
+
+
+class RetentionRunRequest(BaseModel):
+    # Overrides the organization-wide AIVA_RETENTION_DAYS default for this run
+    # only — lets an admin run a tighter one-off sweep (or, in tests, an
+    # immediate one via 0) without changing the standing policy.
+    retention_days: int | None = Field(default=None, ge=0)
+
+
+@router.post("/retention/run")
+async def run_retention(
+    request: Request,
+    body: RetentionRunRequest = RetentionRunRequest(),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*DSAR_ROLES)),
+) -> dict[str, object]:
+    settings: Settings = get_app_settings(request)
+    retention_days = (
+        body.retention_days if body.retention_days is not None else settings.retention_days
+    )
+    cutoff = utcnow() - timedelta(days=retention_days)
+
+    result = await run_retention_sweep(db, user.organization_id, cutoff)
+    await record_event(
+        db,
+        action="retention.swept",
+        entity_type="candidate",
+        actor_id=user.id,
+        organization_id=user.organization_id,
+        payload={"retention_days": retention_days, **result},
+    )
+    await db.flush()
+    return result
 
 
 __all__ = ["router"]

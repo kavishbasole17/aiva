@@ -14,3 +14,7 @@ services/ai-gateway/tests/conftest.py::http://testserver
 compose.yaml::http://ai-gateway:9100
 .env.example::http://localhost
 apps/*/vite.config.ts::http://localhost
+.github/workflows/ci.yml::http://localhost:19200
+compose.yaml::http://sandbox-runner:9200
+scripts/seed_demo_account.sh::http://localhost
+services/sandbox-runner/tests/conftest.py::http://testserver

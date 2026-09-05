@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     sandbox_url: str = ""
     invite_token_days: int = 14
     interview_token_hours: int = 48
+    retention_days: int = Field(default=730, ge=1)
     access_token_minutes: int = 15
     refresh_token_days: int = 14
     log_level: str = "INFO"

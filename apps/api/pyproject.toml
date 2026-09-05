@@ -25,6 +25,12 @@ dependencies = [
     "pgvector>=0.3,<0.4",
     "reportlab>=4.2,<5",
     "openpyxl>=3.1,<4",
+    # scheduling.py's ZoneInfo() lookups need an IANA tz database on disk;
+    # python:3.11-slim (the Dockerfile's base image) doesn't ship one at the
+    # OS level, so this must be a real dependency, not a dev-only convenience
+    # (same "works on the CI host, breaks in the real container" class of
+    # gap already caught once for python-multipart/httpx above).
+    "tzdata>=2024.2",
 ]
 
 [project.optional-dependencies]

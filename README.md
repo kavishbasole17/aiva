@@ -857,14 +857,15 @@ independent jobs:
 - `api-tests` — runs the API's offline unit test suite
 - `integration` — boots the full `docker compose` stack (now including
   `sandbox-runner`), applies migrations, runs `test_integration_readiness.py`
-  against the live services (`AIVA_INTEGRATION=1`), then runs the seven
-  domain lifecycle suites (auth/RBAC, resume→scoring roundtrip, questionnaire
+  against the live services (`AIVA_INTEGRATION=1`), then runs the domain
+  lifecycle suites (auth/RBAC, resume→scoring roundtrip, questionnaire
   single-use flow, interview consent/pre-check/STT-loop, the M9 workspace,
-  the M10 RAG FAQ, and the M10 evaluation engine) against the live stack
-  including the containerized gateway and sandbox-runner
-  (`AIVA_AI_GATEWAY_URL`/`AIVA_SANDBOX_URL` pointed at their container
-  ports), then runs the golden-set evaluation suite against the live AI
-  gateway before tearing the stack down
+  the M10 RAG FAQ, the M10 evaluation engine, the M11 dashboard/blind-
+  screening/scoring-audit/DSAR/integrity-signal set, and the M12 retention
+  sweep) against the live stack including the containerized gateway and
+  sandbox-runner (`AIVA_AI_GATEWAY_URL`/`AIVA_SANDBOX_URL` pointed at their
+  container ports), then runs the golden-set evaluation suite against the
+  live AI gateway before tearing the stack down
 
 ## Architecture decisions (selected)
 
@@ -994,18 +995,98 @@ tab-focus integrity signals, questionnaire "kits", DSAR export/erasure) are
 now delivered and CI-verified, per above — all four have moved out of this
 remaining-work table.
 
-Only one milestone remains:
+Only one milestone remains, and it is now partially underway:
 
 | # | Milestone | Depends on |
 |---|---|---|
 | M12 | Load testing, penetration-test pass, data-retention jobs, Helm chart | M11 |
 
-Open items carried forward in PLAN.md: local Docker Engine install on the
-developer's WSL machine is still pending (the compose stack is currently only
-proven via the CI integration job, not locally); test-coverage thresholds and
+## Retention jobs — Milestone 12 (partial: load test/pen-test/Helm chart not started)
+
+The first slice of M12 is done: automated, age-based erasure of candidate PII,
+reusing rather than duplicating the manual DSAR erasure path Milestone 11
+built. `app/dsar_service.py` is a new module that simply extracts what
+`routers_dsar.py` already had (`find_candidate_records`, `apply_erasure`,
+`record_counts`, `questionnaire_titles_for`) — a behavior-preserving refactor,
+not new logic, confirmed by the existing DSAR tests passing unchanged.
+`app/retention.py` builds on it: `latest_activity_at()` takes the *most*
+recent timestamp across every record kind found for a candidate (resume
+upload, questionnaire invite, interview session, evaluation report) — a
+candidate is only eligible for erasure once every one of those predates the
+cutoff, so one recent interaction (say, a new resume against a different
+requisition) keeps the whole candidate exempt, matching what "delete my data
+N days after my last interaction" should mean rather than aging out each row
+independently. `run_retention_sweep()` finds every candidate email still
+attached to a live record in an organization, checks each against the cutoff,
+and erases the stale ones via the exact same `apply_erasure()` the manual
+DSAR path uses.
+
+This is exposed as `POST /retention/run` (admin-only, same role gate as
+`/dsar/export` and `/dsar/erase`), with a new `AIVA_RETENTION_DAYS` setting
+(default 730 days) and an optional per-call `retention_days` override for a
+tighter one-off sweep. It writes one aggregate `retention.swept` audit event
+per run (candidate count, per-table record counts, and each erased
+candidate's email SHA-256 — never the raw email, same discipline as the
+`dsar.exported`/`dsar.erased` events) rather than one event per candidate, to
+avoid flooding the audit log on a large sweep.
+
+**What this milestone slice deliberately does not include yet**: an actual
+scheduler. There is no ARQ worker (`services/worker` is still an empty
+`.gitkeep` scaffold) and no Helm CronJob (the Helm chart itself is a separate,
+not-yet-started M12 line item) to call this endpoint on a clock. Until one of
+those exists, retention is admin- or externally-cron-triggered, not
+automatic — see ADR-024 for the full reasoning, including why this reuses
+DSAR's erasure path instead of adding a second deletion mechanism.
+
+**Verification**: `test_retention_unit.py` covers `latest_activity_at()`'s
+"most recent record wins, not each row's own age" logic directly, with no
+database needed. `test_integration_retention.py` proves the sweep end-to-end
+against the live stack — a candidate whose only record predates an immediate
+(`retention_days: 0`) cutoff is erased and unfindable afterward (candidate
+email nulled, filename redacted, exactly like a manual DSAR erasure), a
+candidate created moments ago stays untouched under the default 730-day
+window, and a non-admin caller is rejected — and is wired into
+`.github/workflows/ci.yml`'s `integration` job alongside `test_integration_m11.py`.
+All quality gates green (ruff/black/mypy --strict/bandit/pytest) on `apps/api`.
+
+Also fixed in this pass, unrelated to retention itself but caught while
+getting the full stack running locally end-to-end for the first time (`docker
+compose up -d` for Postgres/Redis/MinIO/ai-gateway/sandbox-runner, `uvicorn`
+for the API, `npm run dev` for both frontends): `zoneinfo.ZoneInfo()` lookups
+in `app/scheduling.py` need an IANA time zone database on disk, and
+`python:3.11-slim` (the Dockerfile's base image) doesn't ship one at the OS
+level — the same "works on the CI host, breaks in the real container" class of
+gap already caught once for `python-multipart`/`httpx` (see the API service
+section above). `tzdata` is now a real runtime dependency, not a dev-only
+convenience. Both frontend `vite.config.ts` files also gained an
+`VITE_API_PROXY_TARGET` env override for the dev-server proxy target
+(defaulting to the existing `http://localhost:18000` for everyone) to support
+running the frontend and API on different hosts/network namespaces during
+development — no change to the default same-host behavior.
+
+Also found while running `scripts/check_no_egress.sh` locally for the first
+time on a real Windows checkout: `infra/egress_allowlist.txt` was last updated
+back at Milestone 5, before `services/sandbox-runner` (M9) existed — its test
+suite's `conftest.py`, the `http://sandbox-runner:9200`/`http://localhost:19200`
+references `compose.yaml`/`ci.yml` gained for it, and `scripts/seed_demo_account.sh`
+were never added as allowlist exceptions. All four are internal/loopback
+references, same shape as entries already allowlisted for the API and
+ai-gateway, so all four are now added; the `no-egress` CI job was almost
+certainly failing on `main` before this, undetected until it was actually run
+in this pass rather than assumed green. Separately, this Windows checkout's
+Git for Windows default (`core.autocrlf=true`) had silently rewritten
+`infra/egress_allowlist.txt` and every `scripts/*.sh` file to CRLF, which
+broke every single one of that script's allowlist-rule regex matches at once
+with no error — a new repo-root `.gitattributes` (`* text=auto eol=lf`) now
+forces LF for all text files regardless of a checkout's local `core.autocrlf`
+setting, so this can't recur for the next Windows-based operator.
+
+Open items carried forward in PLAN.md: test-coverage thresholds and
 golden-set evaluation content begin at M4; MinIO encryption-at-rest is wired
 at M12 (see ADR-008 above). M12's Helm chart also confirms the intended
-production deployment target is Kubernetes.
+production deployment target is Kubernetes. The previously-open "local Docker
+Engine install pending" item is now resolved — see the M12 retention section
+above for the verified local run.
 
 ## Milestone 0 verification evidence
 
