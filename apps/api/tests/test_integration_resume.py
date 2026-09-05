@@ -189,3 +189,43 @@ async def test_duplicate_resume_rejected(http: httpx.AsyncClient) -> None:
 async def test_healthz_alive(http: httpx.AsyncClient) -> None:
     response = await http.get("/healthz")
     assert response.status_code == 200
+
+
+async def test_oversized_upload_rejected_without_buffering_it_whole(
+    http: httpx.AsyncClient,
+) -> None:
+    # _read_capped rejects as soon as the running total crosses the limit,
+    # reading in fixed-size chunks rather than the naive `await file.read()`
+    # (which would buffer the entire oversized body into one `bytes` object
+    # before ever checking its length) -- this proves the endpoint still
+    # returns 413 correctly under that bounded-read implementation.
+    org = await http.post(
+        "/auth/register-org",
+        json={
+            "organization_name": "Oversized Org",
+            "admin_email": "oversized-admin@example.test",
+            "admin_password": PASSWORD,
+        },
+    )
+    token_response = await http.post(
+        "/auth/login",
+        json={"email": "oversized-admin@example.test", "password": PASSWORD},
+    )
+    headers = {"Authorization": f"Bearer {token_response.json()['access_token']}"}
+    dept = await http.post(
+        f"/orgs/{org.json()['organization_id']}/departments", json={"name": "D"}, headers=headers
+    )
+    req = await http.post(
+        f"/departments/{dept.json()['id']}/requisitions",
+        json={"title": "T", "department_id": dept.json()["id"]},
+        headers=headers,
+    )
+    rid = req.json()["id"]
+
+    too_big = b"x" * (10 * 1024 * 1024 + 1)
+    response = await http.post(
+        f"/requisitions/{rid}/resumes",
+        files={"file": ("huge.txt", too_big, "text/plain")},
+        headers=headers,
+    )
+    assert response.status_code == 413, response.text

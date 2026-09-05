@@ -43,6 +43,28 @@ EDIT_ROLES = (Role.ADMIN.value, Role.HIRING_MANAGER.value, Role.RECRUITER.value)
 STAFF_ROLES = (*EDIT_ROLES, Role.INTERVIEWER.value, Role.AUDITOR.value)
 
 
+async def _read_capped(file: UploadFile, limit: int) -> bytes:
+    """Read at most `limit` bytes, rejecting early rather than after the
+    fact. A plain `await file.read()` would buffer the client's entire body
+    into one `bytes` object first and only check its length afterward --
+    Starlette's spooled temp file keeps that off the heap while the request
+    is being parsed, but this line re-loads all of it into memory regardless
+    of how large the upload actually was, so an oversized upload could still
+    exhaust the process before the existing size check ever ran.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="File exceeds 10MB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 class JobDescriptionCreate(BaseModel):
     title: str = PydField(min_length=1, max_length=300)
     raw_text: str = PydField(min_length=1)
@@ -163,9 +185,7 @@ async def upload_resume(
     user: User = Depends(require_roles(*EDIT_ROLES)),
 ) -> dict[str, object]:
     await _load_requisition(db, user, requisition_id)
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="File exceeds 10MB limit")
+    data = await _read_capped(file, MAX_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
 
