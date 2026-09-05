@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_app_settings, get_db, require_roles
 from app.models import FaqDocument, Role, User
+from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
 from app.routers_interview import _session_by_token, _terminal
 from app.routers_resume import _load_requisition
 from app.settings import Settings
@@ -136,6 +137,7 @@ async def list_faq(
 
 
 @router.post("/public/interview-sessions/{raw_token}/faq")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def ask_faq(
     raw_token: str,
     body: FaqAsk,

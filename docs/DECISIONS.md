@@ -908,3 +908,58 @@ loop) to send reminders automatically. Would have been the first background-task
 subsystem anywhere in this codebase, for a job whose correct cadence (how often is
 "often enough") is exactly the kind of deployment-environment decision ADR-029 already
 reasoned belongs to the deployer, not baked into the app process.
+
+## ADR-035 — Pen-test pass (M12): rate-limit coverage gap closed; no exploitable findings
+
+Context: M12's four line items (load test, Helm chart, retention jobs, pen-test pass)
+had three delivered; the pen-test pass was the one still fully open. This is a manual
+security review of the live stack, not an automated scan -- auth/session handling,
+cross-org access control, injection surfaces, secrets handling, and the rate-limiting
+layer ADR-025-adjacent work (b27229c) had just added.
+Finding, real and fixed: `app/rate_limit.py`'s `PUBLIC_ENDPOINT_LIMIT` had been wired
+into only 2 of the ~18 unauthenticated, raw-token-gated candidate endpoints (the two
+`GET`-current-state routes in `routers_interview.py`/`routers_questionnaire.py`) --
+every consent/precheck/start/turn/finish/tts/whiteboard/discussion/screen-share/faq
+endpoint relied solely on the 200/minute global default. Every raw token in this
+system (`generate_invite_token`, reused for questionnaire invites, interview sessions,
+and coding tasks) is 256-bit random, so this was never a practical brute-force gap --
+but it was an inconsistent one, and the global default alone is a weaker DoS ceiling
+than routes without a real reason for high-frequency traffic need. Now applied to 14
+additional endpoints across `routers_interview.py`, `routers_questionnaire.py`,
+`routers_workspace.py`, and `routers_faq.py`. Two endpoints were deliberately left on
+just the global default: code autosave (800ms-debounced keystroke saves can
+legitimately exceed 30/minute while typing continuously) and code execution (a
+candidate iterating quickly while debugging) -- applying the stricter limit there
+would risk throttling normal use for no real security gain, since both already sit
+behind the same 256-bit token.
+Reviewed and found no issues: `app/crypto.py`'s AES-256-GCM (fresh random 12-byte
+nonce per encryption via `os.urandom`, authenticated so tampering fails decryption
+rather than returning garbage); JWT decoding pins `algorithms=["HS256"]` explicitly
+(no `alg: none` confusion possible); `app/email.py` uses `email.message.EmailMessage`
+with the modern `policy.default`, which rejects embedded CR/LF in header values by
+construction (no header-injection path via candidate-supplied `to`/`subject`);
+`routers_retention.py` and `routers_reminders.py` both explicitly reject
+`user.organization_id != organization_id` before touching data, on top of RLS: two
+independent layers, not one; the sandbox-runner `NetworkPolicy` denies all pod egress
+except DNS, on top of the per-execution `unshare --net` isolation ADR-019 already
+proved; the Anthropic backend's forced `tool_use` schema and prompt-injection warnings
+in the three LLM-facing prompts were already in place from the work that added them;
+no `dangerouslySetInnerHTML`/`innerHTML`/`eval` anywhere in either frontend app.
+Verification: the full domain-lifecycle integration suite was re-run end to end
+against a completely fresh `docker compose` stack (dropped volumes, full migration
+chain 0001→0015) after these changes, file by file exactly as `ci.yml` invokes them
+(each its own process, since `slowapi`'s `Limiter` is an in-process singleton and
+running multiple files in one `pytest` invocation shares its counters across files in
+a way CI's per-file jobs never do) -- all passed, plus a dedicated
+`test_integration_login_rate_limit.py` proving the existing `/auth/login` 429
+behavior for real (`AIVA_ENVIRONMENT` left unset, not `test`, so enforcement is
+actually active). `ruff`/`black`/`mypy --strict`/`bandit` clean on `apps/api`.
+Consequences: this closes M12's last open line item. Not in scope for this pass (not
+security findings, noted for completeness): a single test in this session's own local
+Windows/Docker-Desktop environment (`test_upload_jd_score_roundtrip_with_determinism`)
+was reproducibly slow (~9 minutes) despite the AI gateway itself responding in single-digit
+milliseconds to a direct request -- consistent with known Windows-host/Docker-Desktop
+port-proxy overhead on repeated short-lived async HTTP connections rather than an
+application defect; every CI run of this same test (Linux, real Docker bridge network)
+has been fast. Not chased further here since it doesn't reproduce in the deployment
+target this project actually ships to.

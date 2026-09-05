@@ -413,9 +413,11 @@ async def public_session_state(
 
 
 @router.post("/public/interview-sessions/{raw_token}/consent")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def decide_consent(
     raw_token: str,
     body: ConsentDecision,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
@@ -463,9 +465,11 @@ async def decide_consent(
 
 
 @router.post("/public/interview-sessions/{raw_token}/precheck")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def submit_precheck(
     raw_token: str,
     body: PreCheckReport,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
@@ -495,8 +499,10 @@ async def submit_precheck(
 
 
 @router.post("/public/interview-sessions/{raw_token}/start")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def start_interview(
     raw_token: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
@@ -564,6 +570,7 @@ async def _transcribe(settings: Settings, audio_b64: str) -> tuple[str, float, s
 
 
 @router.post("/public/interview-sessions/{raw_token}/turns")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def submit_turn(
     raw_token: str,
     body: TurnAnswer,
@@ -654,8 +661,10 @@ async def submit_turn(
 
 
 @router.post("/public/interview-sessions/{raw_token}/finish")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def finish_interview(
     raw_token: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
@@ -675,6 +684,7 @@ async def finish_interview(
 
 
 @router.post("/public/interview-sessions/{raw_token}/tts")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def speak(
     raw_token: str,
     body: TtsRequest,

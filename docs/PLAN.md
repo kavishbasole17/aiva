@@ -325,7 +325,7 @@ milestone was called done (ADR-022). All quality gates green
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 — 3 of 4 have a first pass delivered; pen-test pass remains fully open |
+| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 — all four have a first pass delivered |
 
 M12 progress: **retention jobs (core, delivered)** — `POST /orgs/{id}/retention/run`
 built on the existing DSAR erasure logic, dry-run by default, org-scoped, verified
@@ -347,10 +347,19 @@ this — see ADR-030), now also wired into `compose.yaml`. `helm lint`/`helm tem
 both pass, including with the bundled data stores toggled off — but no Kubernetes
 cluster was available to actually `helm install` against, so real-cluster deployment
 is unverified; treated and documented as such, not claimed as proven (ADR-030).
-Still fully open: a real pen-test pass (a security review of new/changed code happened
-repeatedly throughout this session's work and found real issues each time — ADR-027,
-ADR-028 — but that is not the same thing as a dedicated penetration test of the whole
-system).
+**Pen-test pass (delivered)** — a dedicated security review of the live stack (not
+just new/changed-code review, which had already happened repeatedly and found real
+issues each time — ADR-027, ADR-028). Real finding: `PUBLIC_ENDPOINT_LIMIT` was wired
+into only 2 of ~18 unauthenticated, raw-token-gated candidate endpoints; now applied
+to 14 more (two — code autosave and code execution — deliberately left on just the
+200/minute global default to avoid throttling legitimate high-frequency use). No
+exploitable findings elsewhere: encryption, JWT handling, cross-org checks, email
+header injection, sandbox network isolation, and frontend DOM-injection surfaces were
+all reviewed with nothing to fix. See ADR-035. All four M12 line items now have a
+first pass delivered — M12 is no longer fully open, though see each item's own section
+above for what's explicitly still first-pass/not-production-hardened (no scheduler for
+retention/reminders, no real Kubernetes cluster to verify the Helm chart against, load
+test is a single data point not a capacity number).
 
 ## Known open items carried forward
 

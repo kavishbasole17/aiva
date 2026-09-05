@@ -22,9 +22,11 @@ the M10 RAG FAQ + cross-signal evaluation engine with PDF/Excel export, and
 the M11 dashboard/blind-screening/scoring-audit/integrity-signals/kits/DSAR
 set (see `docs/PLAN.md`'s Milestone 11 section for exactly what each was
 scoped to, and why two of those names were deliberately narrowed — ADR-023)
-are all built and working end to end against a live stack. Only Milestone
-12 (load test, pen-test pass, retention jobs, Helm chart — production
-hardening) has not started. Governance docs:
+are all built and working end to end against a live stack. Milestone 12
+(load test, pen-test pass, retention jobs, Helm chart — production
+hardening) now has a first pass on all four line items — see the Milestone
+12 section below for exactly what "first pass" does and doesn't mean for
+each. Governance docs:
 `docs/PLAN.md` (build order and verification evidence), `docs/DECISIONS.md`
 (architecture decision records, including ADR-024 — the switch to the
 Anthropic API and the branding rebrand away from an earlier reference site),
@@ -1018,13 +1020,16 @@ independent jobs:
   `sandbox-runner`), applies migrations, runs `test_integration_readiness.py`
   against the live services (`AIVA_INTEGRATION=1`), then runs the domain
   lifecycle suites (auth/RBAC, resume→scoring roundtrip, questionnaire
-  single-use flow, interview consent/pre-check/STT-loop, the M9 workspace,
-  the M10 RAG FAQ, the M10 evaluation engine, the M11 dashboard/blind-
-  screening/scoring-audit/DSAR/integrity-signal set, and the M12 retention
-  sweep) against the live stack including the containerized gateway and
-  sandbox-runner (`AIVA_AI_GATEWAY_URL`/`AIVA_SANDBOX_URL` pointed at their
-  container ports), then runs the golden-set evaluation suite against the
-  live AI gateway before tearing the stack down
+  single-use flow, DST-correct scheduling, interview consent/pre-check/
+  STT-loop, the M9 workspace, the M10 RAG FAQ, the M10 evaluation engine, the
+  M11 dashboard/blind-screening/scoring-audit/DSAR/integrity-signal set, and
+  the M12 retention sweep) against the live stack including the containerized
+  gateway and sandbox-runner (`AIVA_AI_GATEWAY_URL`/`AIVA_SANDBOX_URL` pointed
+  at their container ports), then a dedicated step re-runs the login
+  rate-limit test with real enforcement on (every other step sets
+  `AIVA_ENVIRONMENT=test` so the process-wide rate limiter doesn't leak
+  counters across test files), then runs the golden-set evaluation suite
+  against the live AI gateway before tearing the stack down
 
 ## Architecture decisions (selected)
 
@@ -1169,59 +1174,74 @@ tab-focus integrity signals, questionnaire "kits", DSAR export/erasure) are
 now delivered and CI-verified, per above — all four have moved out of this
 remaining-work table.
 
-Only one milestone remains, and it is now partially underway:
+Only one milestone remains, and all four of its line items now have a first pass:
 
 | # | Milestone | Depends on |
 |---|---|---|
 | M12 | Load testing, penetration-test pass, data-retention jobs, Helm chart | M11 |
 
-## Retention jobs — Milestone 12 (partial: load test/pen-test/Helm chart not started)
+## Milestone 12 — production hardening (all four line items have a first pass)
 
-The first slice of M12 is done: automated, age-based erasure of candidate PII,
-reusing rather than duplicating the manual DSAR erasure path Milestone 11
-built. `app/dsar_service.py` is a new module that simply extracts what
-`routers_dsar.py` already had (`find_candidate_records`, `apply_erasure`,
-`record_counts`, `questionnaire_titles_for`) — a behavior-preserving refactor,
-not new logic, confirmed by the existing DSAR tests passing unchanged.
-`app/retention.py` builds on it: `latest_activity_at()` takes the *most*
-recent timestamp across every record kind found for a candidate (resume
-upload, questionnaire invite, interview session, evaluation report) — a
-candidate is only eligible for erasure once every one of those predates the
-cutoff, so one recent interaction (say, a new resume against a different
-requisition) keeps the whole candidate exempt, matching what "delete my data
-N days after my last interaction" should mean rather than aging out each row
-independently. `run_retention_sweep()` finds every candidate email still
-attached to a live record in an organization, checks each against the cutoff,
-and erases the stale ones via the exact same `apply_erasure()` the manual
-DSAR path uses.
+Retention jobs, load test, Helm chart, and the pen-test pass are all delivered
+in first-pass form; none is claimed as production-hardened beyond what's
+stated explicitly below.
 
-This is exposed as `POST /retention/run` (admin-only, same role gate as
-`/dsar/export` and `/dsar/erase`), with a new `AIVA_RETENTION_DAYS` setting
-(default 730 days) and an optional per-call `retention_days` override for a
-tighter one-off sweep. It writes one aggregate `retention.swept` audit event
-per run (candidate count, per-table record counts, and each erased
-candidate's email SHA-256 — never the raw email, same discipline as the
-`dsar.exported`/`dsar.erased` events) rather than one event per candidate, to
-avoid flooding the audit log on a large sweep.
+**Retention jobs**: `app/routers_retention.py`'s `POST
+/orgs/{id}/retention/run` (admin-only, org-scoped) ages candidates off by
+their earliest resume upload date, reusing `routers_dsar.py`'s own erasure
+logic (`_find_candidate_records`/`_apply_erasure`, exposed for reuse rather
+than duplicated) rather than inventing a second deletion mechanism —
+`retention_days` is a required per-call parameter, not a hardcoded default,
+since no retention window is asserted as legally correct for any
+jurisdiction. `dry_run` (default `true`) previews which candidates are
+eligible before anything is actually erased; `max_candidates` caps a single
+run. See ADR-029. What this deliberately does not include: an actual
+scheduler — no ARQ worker (`services/worker` is still an empty `.gitkeep`
+scaffold) and no Helm CronJob calls this on a clock yet, so it's admin- or
+externally-cron-triggered today, not automatic.
 
-**What this milestone slice deliberately does not include yet**: an actual
-scheduler. There is no ARQ worker (`services/worker` is still an empty
-`.gitkeep` scaffold) and no Helm CronJob (the Helm chart itself is a separate,
-not-yet-started M12 line item) to call this endpoint on a clock. Until one of
-those exists, retention is admin- or externally-cron-triggered, not
-automatic — see ADR-024 for the full reasoning, including why this reuses
-DSAR's erasure path instead of adding a second deletion mechanism.
+**Load test**: `scripts/load_test.py`, stdlib-only (`urllib` +
+`concurrent.futures`, no dependency install needed), run against a live
+instance: ~190 req/s at concurrency 20 and ~290 req/s at concurrency 60 on a
+single-container dev-machine deployment, zero errors at either level, p99
+latency climbing from ~100–400ms to ~550ms–1.6s between the two. See
+RUNBOOK.md's Load testing section for the full numbers and what this run
+does and does not establish — a first data point on one dev machine, not a
+production capacity number or a sustained-load result.
 
-**Verification**: `test_retention_unit.py` covers `latest_activity_at()`'s
-"most recent record wins, not each row's own age" logic directly, with no
-database needed. `test_integration_retention.py` proves the sweep end-to-end
-against the live stack — a candidate whose only record predates an immediate
-(`retention_days: 0`) cutoff is erased and unfindable afterward (candidate
-email nulled, filename redacted, exactly like a manual DSAR erasure), a
-candidate created moments ago stays untouched under the default 730-day
-window, and a non-admin caller is rejected — and is wired into
-`.github/workflows/ci.yml`'s `integration` job alongside `test_integration_m11.py`.
-All quality gates green (ruff/black/mypy --strict/bandit/pytest) on `apps/api`.
+**Helm chart**: `infra/helm/aiva`, covering all five app-tier services plus
+optional bundled Postgres/Redis/MinIO, Secret, Ingress, and a NetworkPolicy
+scoping sandbox-runner's egress to DNS only. Required containerizing the
+frontend for the first time (`apps/web-recruiter`/`apps/web-candidate` had no
+Dockerfile before this — ADR-030). `helm lint`/`helm template` both pass, but
+no Kubernetes cluster was available to actually `helm install` against, so
+real-cluster deployment is unverified — stated as such, not claimed proven.
+
+**Pen-test pass**: a dedicated security review of the live stack (distinct
+from the repeated new-code security reviews that already happened throughout
+this project's history and found real issues each time — ADR-027, ADR-028).
+Real finding, fixed: `app/rate_limit.py`'s `PUBLIC_ENDPOINT_LIMIT` was wired
+into only 2 of the ~18 unauthenticated, raw-token-gated candidate endpoints
+(the two `GET`-current-state routes) — every consent/precheck/start/turn/
+finish/tts/whiteboard/discussion/screen-share/faq endpoint relied solely on
+the 200/minute global default. Every raw token in this system is 256-bit
+random (`generate_invite_token`), so this was never a practical brute-force
+gap, but it was an inconsistent one. Now applied to 14 more endpoints across
+`routers_interview.py`, `routers_questionnaire.py`, `routers_workspace.py`,
+and `routers_faq.py` — code autosave and code execution deliberately stay on
+just the global default, since their legitimate call rate (an 800ms-debounced
+keystroke save; a candidate iterating while debugging) can exceed 30/minute
+without any real security loss given the same 256-bit token already gates
+both. Reviewed with nothing to fix: AES-256-GCM encryption (fresh random
+nonce per write, authenticated), JWT decoding's explicit `algorithms=["HS256"]`
+pin, `EmailMessage`'s modern policy rejecting header injection, cross-org
+checks on the retention/reminder endpoints on top of RLS, the sandbox
+NetworkPolicy, the Anthropic backend's forced-schema tool call, and the
+frontend's total absence of `dangerouslySetInnerHTML`/`innerHTML`/`eval`. New
+`test_integration_login_rate_limit.py` proves `/auth/login`'s existing 429
+behavior for real (run with real enforcement, not the `AIVA_ENVIRONMENT=test`
+override the rest of the integration suite uses to avoid the process-wide
+rate limiter's counters leaking across test files). See ADR-035.
 
 Also fixed in this pass, unrelated to retention itself but caught while
 getting the full stack running locally end-to-end for the first time (`docker

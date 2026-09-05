@@ -39,6 +39,7 @@ from app.models import (
     User,
     WhiteboardStroke,
 )
+from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
 from app.routers_interview import _session_by_token, _terminal
 from app.settings import Settings
 
@@ -389,8 +390,9 @@ def _require_not_terminal(session: InterviewSession) -> None:
 
 
 @router.get("/public/interview-sessions/{raw_token}/coding-tasks")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def list_tasks_public(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    raw_token: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_not_terminal(session)
@@ -409,8 +411,9 @@ async def list_tasks_public(
 
 
 @router.get("/public/interview-sessions/{raw_token}/coding-tasks/{task_id}/code")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def get_code_public(
-    raw_token: str, task_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    raw_token: str, task_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_not_terminal(session)
@@ -420,6 +423,9 @@ async def get_code_public(
 
 
 @router.post("/public/interview-sessions/{raw_token}/coding-tasks/{task_id}/code", status_code=201)
+# No PUBLIC_ENDPOINT_LIMIT here on purpose -- see app/rate_limit.py's module
+# docstring: 800ms-debounced autosave can legitimately exceed 30/minute while
+# typing continuously. Still covered by the 200/minute global default.
 async def save_code_public(
     raw_token: str, task_id: uuid.UUID, body: CodeSave, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
@@ -435,6 +441,9 @@ async def save_code_public(
 
 
 @router.post("/public/interview-sessions/{raw_token}/coding-tasks/{task_id}/run")
+# No PUBLIC_ENDPOINT_LIMIT here on purpose -- a candidate iterating quickly
+# while debugging can legitimately run code several times in a row. Still
+# covered by the 200/minute global default.
 async def run_code_public(
     raw_token: str,
     task_id: uuid.UUID,
@@ -482,8 +491,9 @@ async def run_code_public(
 
 
 @router.get("/public/interview-sessions/{raw_token}/whiteboard")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def list_whiteboard_public(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    raw_token: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_not_terminal(session)
@@ -502,8 +512,9 @@ async def list_whiteboard_public(
 
 
 @router.post("/public/interview-sessions/{raw_token}/whiteboard", status_code=201)
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def add_stroke_public(
-    raw_token: str, body: StrokeCreate, db: AsyncSession = Depends(get_db)
+    raw_token: str, body: StrokeCreate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_active(session)
@@ -521,8 +532,9 @@ async def add_stroke_public(
 
 
 @router.get("/public/interview-sessions/{raw_token}/discussion")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def list_discussion_public(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    raw_token: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_not_terminal(session)
@@ -541,8 +553,9 @@ async def list_discussion_public(
 
 
 @router.post("/public/interview-sessions/{raw_token}/discussion", status_code=201)
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def post_discussion_public(
-    raw_token: str, body: MessageCreate, db: AsyncSession = Depends(get_db)
+    raw_token: str, body: MessageCreate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_active(session)
@@ -560,8 +573,9 @@ async def post_discussion_public(
 
 
 @router.post("/public/interview-sessions/{raw_token}/screen-share/token")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def screen_share_token(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    raw_token: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     _require_not_terminal(session)

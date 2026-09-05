@@ -264,9 +264,11 @@ async def get_public_questionnaire(
 
 
 @router.put("/public/questionnaires/{raw_token}/responses")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def upsert_response(
     raw_token: str,
     body: ResponseUpsert,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     invite = (

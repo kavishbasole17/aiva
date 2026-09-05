@@ -19,3 +19,16 @@ AUTH_LOGIN_LIMIT = "10/minute"
 AUTH_REGISTER_LIMIT = "5/minute"
 AUTH_REFRESH_LIMIT = "30/minute"
 PUBLIC_ENDPOINT_LIMIT = "30/minute"
+
+# Pen-test pass (M12): PUBLIC_ENDPOINT_LIMIT was previously wired into only 2 of
+# the ~18 unauthenticated, raw-token-gated candidate endpoints (the two GET
+# "fetch state" routes) -- every other one relied solely on the 200/minute
+# global default above. Tokens are 256-bit (`generate_invite_token`), so this
+# was never a practical brute-force gap, but it was an inconsistent one, and
+# the global default alone is a weak DoS ceiling for routes that don't need
+# it. Now applied to every public route *except* the two genuinely
+# high-frequency, low-marginal-risk ones: code autosave (800ms-debounced
+# keystroke saves can legitimately exceed 30/minute while typing) and code
+# execution (a candidate iterating quickly while debugging) -- both stay
+# under the 200/minute global default instead, which is still a real ceiling,
+# just not one that risks throttling normal use.
