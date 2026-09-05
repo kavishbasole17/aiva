@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     retention_days: int = Field(default=730, ge=1)
     access_token_minutes: int = 15
     refresh_token_days: int = 14
+    login_rate_limit_per_account: int = Field(default=10, ge=1)
+    login_rate_limit_per_ip: int = Field(default=30, ge=1)
+    login_rate_limit_window_seconds: int = Field(default=900, ge=1)
+    register_org_rate_limit_per_ip: int = Field(default=5, ge=1)
+    register_org_rate_limit_window_seconds: int = Field(default=3600, ge=1)
     log_level: str = "INFO"
     environment: str = "development"
 

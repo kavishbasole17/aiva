@@ -1,4 +1,5 @@
 import os
+import uuid
 
 import httpx
 import pytest
@@ -230,3 +231,28 @@ async def test_mfa_flow(http: httpx.AsyncClient) -> None:
 async def test_healthz_alive(http: httpx.AsyncClient) -> None:
     response = await http.get("/healthz")
     assert response.status_code == 200
+
+
+async def test_login_rate_limits_failed_attempts(http: httpx.AsyncClient) -> None:
+    # M12 pen-test finding: /auth/login previously had no limit on failed
+    # attempts at all. Exhausts the default per-account failure budget (10)
+    # with wrong passwords, then proves the account is genuinely paused --
+    # not just "guessing is hard" -- by showing even the correct password is
+    # rejected while locked out.
+    suffix = uuid.uuid4().hex[:8]
+    email = f"lockout-{suffix}@example.test"
+    await register_org(http, f"Lockout Org {suffix}", email)
+
+    for _ in range(10):
+        wrong = await http.post("/auth/login", json={"email": email, "password": "wrong-password"})
+        assert wrong.status_code == 401
+
+    still_wrong = await http.post(
+        "/auth/login", json={"email": email, "password": "wrong-password"}
+    )
+    assert still_wrong.status_code == 429
+
+    correct_but_locked = await http.post(
+        "/auth/login", json={"email": email, "password": STAFF_PASSWORD}
+    )
+    assert correct_but_locked.status_code == 429

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 from pydantic import Field as PydField
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,12 +19,17 @@ from app.auth_service import (
     verify_password,
     verify_totp,
 )
-from app.deps import get_app_settings, get_db, get_db_public, require_roles
+from app.deps import get_app_settings, get_db, get_db_public, get_redis, require_roles
 from app.models import Organization, Role, User
+from app.rate_limit import clear_failures, failure_count, record_failure
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client is not None else "unknown"
 
 
 class RegisterOrgRequest(BaseModel):
@@ -67,8 +73,20 @@ class MeResponse(BaseModel):
 
 @router.post("/auth/register-org", status_code=201)
 async def register_organization(
-    body: RegisterOrgRequest, db: AsyncSession = Depends(get_db_public)
+    body: RegisterOrgRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_public),
+    redis: Redis = Depends(get_redis),
 ) -> dict[str, object]:
+    settings = get_app_settings(request)
+    # Counts every attempt, not just failures -- this caps the total rate of
+    # org creation from one source, unlike the login limiter below which only
+    # tracks failed authentication attempts.
+    ip_key = f"register_org_attempts:ip:{_client_ip(request)}"
+    if await failure_count(redis, ip_key) >= settings.register_org_rate_limit_per_ip:
+        raise HTTPException(status_code=429, detail="Too many organizations registered recently")
+    await record_failure(redis, ip_key, settings.register_org_rate_limit_window_seconds)
+
     existing = (
         await db.execute(select(Organization).where(Organization.name == body.organization_name))
     ).scalar_one_or_none()
@@ -109,22 +127,45 @@ async def login(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> TokenPairResponse:
+    settings = get_app_settings(request)
+    # Rate-limited on failures only (never on a success), scoped both to the
+    # target account (stops a brute-force attack aimed at one user) and to
+    # the caller's IP (stops one source spraying many accounts) -- either
+    # limit alone leaves a gap the other closes. Counted before the password
+    # is even checked, so a locked-out caller can't distinguish "wrong
+    # password" from "account doesn't exist" through timing.
+    account_key = f"login_fail:account:{body.email.lower()}"
+    ip_key = f"login_fail:ip:{_client_ip(request)}"
+    if (
+        await failure_count(redis, account_key) >= settings.login_rate_limit_per_account
+        or await failure_count(redis, ip_key) >= settings.login_rate_limit_per_ip
+    ):
+        raise HTTPException(status_code=429, detail="Too many login attempts; try again later")
+
+    async def _record_failure() -> None:
+        await record_failure(redis, account_key, settings.login_rate_limit_window_seconds)
+        await record_failure(redis, ip_key, settings.login_rate_limit_window_seconds)
+
     user = (
         await db.execute(select(User).where(User.email == body.email.lower()))
     ).scalar_one_or_none()
     if user is None or not verify_password(user.password_hash, body.password):
+        await _record_failure()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
 
     if user.mfa_enabled:
         if body.totp_code is None:
+            await _record_failure()
             raise HTTPException(status_code=401, detail="TOTP code required")
         if not verify_totp(user.mfa_secret, body.totp_code):
+            await _record_failure()
             raise HTTPException(status_code=401, detail="Invalid TOTP code")
 
-    settings = get_app_settings(request)
+    await clear_failures(redis, account_key)
     access, refresh = await mint_session(
         db,
         user,
