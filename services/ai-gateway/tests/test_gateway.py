@@ -72,3 +72,38 @@ async def test_missing_prompt_inputs_400(client: httpx.AsyncClient) -> None:
     )
     assert response.status_code == 400
     assert "Missing prompt inputs" in response.json()["detail"]
+
+
+QUESTIONNAIRE_EVAL_INPUTS = {
+    "jd_clause": "5 years of Python, remote-first",
+    "qa_pairs": "notice_period: What is your notice period? -> 2 weeks",
+    "resume_spans": "span-01: 5 years Python backend experience",
+}
+
+
+async def test_questionnaire_evaluation_is_schema_valid_and_deterministic(
+    client: httpx.AsyncClient,
+) -> None:
+    """Regression test for a real bug: QuestionnaireEvaluation's `recommendation`
+    is an enum-constrained field, and MockBackend's deterministic fill
+    originally had no enum handling -- it synthesized a placeholder string
+    matching none of the allowed values, failing this same model's own
+    validation. Fixed in backends.py's _deterministic_fill; this test proves
+    the fix, not just that the endpoint returns 200."""
+    request_payload = {
+        "prompt_id": "questionnaire_evaluation",
+        "response_model": "QuestionnaireEvaluation",
+        "inputs": QUESTIONNAIRE_EVAL_INPUTS,
+        "seed_key": "response-1",
+    }
+    first = await client.post("/v1/generate", json=request_payload)
+    assert first.status_code == 200, first.text
+    data = first.json()["data"]
+    assert data["recommendation"] in {"proceed", "hold", "reject"}
+    assert 0 <= data["overall_score"] <= 100
+    assert isinstance(data["inconsistencies"], list)
+    assert isinstance(data["missing_critical_info"], list)
+    assert len(data["cited_span_ids"]) >= 1
+
+    second = await client.post("/v1/generate", json=request_payload)
+    assert second.json()["data"] == data

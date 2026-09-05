@@ -8,8 +8,8 @@ class Settings(BaseSettings):
 
     llm_backend: str = "mock"
     prompts_dir: str = ""
-    vllm_base_url: str = ""
-    vllm_model: str = "Qwen2.5-14B-Instruct-AWQ"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
     stt_backend: str = "mock"
     stt_model: str = "faster-whisper-large-v3"
     tts_backend: str = "mock"

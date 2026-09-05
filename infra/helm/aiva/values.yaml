@@ -1,0 +1,129 @@
+# Default values for the aiva chart. See docs/DECISIONS.md's ADR-030 for
+# what this chart has and hasn't been verified against (rendering only, no
+# real cluster deployment in this repo's own history yet).
+
+image:
+  registry: ""            # e.g. ghcr.io/your-org -- left blank, must be set
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Every app-tier service mirrors compose.yaml's shape 1:1 so the same
+# Dockerfiles/images work in both places with no changes.
+api:
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+aiGateway:
+  replicaCount: 2
+  port: 9100
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  llmBackend: mock   # set to "anthropic" and supply anthropicApiKey via a real Secret to enable it
+
+sandboxRunner:
+  replicaCount: 2
+  port: 9200
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi }
+  # Required for unshare --pid --net to work at all (ADR-028) -- Docker's
+  # (and most CNI default pod security profiles') capability set excludes
+  # this. A narrow, specific grant, not privileged: true.
+  capabilities:
+    - SYS_ADMIN
+
+webRecruiter:
+  replicaCount: 2
+  port: 80
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+webCandidate:
+  replicaCount: 2
+  port: 80
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# --- Bundled data stores: dev/demo/small-deployment convenience only. ---
+# A real production deployment should point `externalDatabaseUrl` /
+# `externalRedisUrl` / external S3-compatible object storage at managed
+# services instead (RDS-or-equivalent, managed Redis, S3) and set
+# postgres.enabled / redis.enabled / minio.enabled to false. These bundled
+# StatefulSets/Deployments have no backup/HA story of their own -- that is
+# exactly the gap ADR-008 and RUNBOOK.md's "Backup & restore: pending M12"
+# line already name.
+postgres:
+  enabled: true
+  image: pgvector/pgvector:pg16
+  storageSize: 10Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  storageSize: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+minio:
+  enabled: true
+  image: minio/minio:RELEASE.2024-10-29T16-01-48Z
+  storageSize: 20Gi
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+
+email:
+  # Defaults to logging what would be sent (app/email.py) rather than
+  # actually delivering anything -- zero setup, nothing sent. Set to "smtp"
+  # and fill in the rest (plus secrets.emailSmtpUsername/Password) for real
+  # delivery.
+  backend: log
+  smtpHost: ""
+  smtpPort: 587
+  fromAddr: no-reply@aiva.local
+  # Used to build the candidate-facing link in questionnaire invite emails
+  # -- point this at wherever web-candidate is actually reachable
+  # (a real domain if ingress.enabled, otherwise the Service's own address).
+  candidatePortalUrl: "http://localhost:15174"
+
+# Real values MUST be supplied via a separate, non-committed values file or
+# --set-file / external-secrets-operator in any real deployment (ADR-005's
+# "no secrets in the repo" rule applies here exactly as it does to
+# compose.yaml). These are placeholders that make `helm template` render
+# without error, not usable secrets.
+secrets:
+  jwtSecret: "REPLACE_ME"
+  encryptionKey: "REPLACE_ME_BASE64_32_BYTES"
+  anthropicApiKey: ""
+  postgresPassword: "REPLACE_ME"
+  postgresAppPassword: "REPLACE_ME"
+  minioAccessKey: "REPLACE_ME"
+  minioSecretKey: "REPLACE_ME"
+  emailSmtpUsername: ""
+  emailSmtpPassword: ""
+
+networkPolicy:
+  # Confines sandbox-runner's pod-to-pod traffic to nothing (it already
+  # gets network isolation per-execution via its own unshare --net, ADR-019
+  # -- this is defense in depth at the cluster level, restricting the *pod*
+  # itself from reaching anything other than what it needs to serve its own
+  # API, which is nothing outbound).
+  enabled: true

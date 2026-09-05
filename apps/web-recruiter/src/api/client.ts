@@ -142,6 +142,79 @@ export interface DiscussionMessage {
   created_at: string;
 }
 
+export interface Department {
+  id: string;
+  name: string;
+}
+
+export interface RequisitionSummary {
+  id: string;
+  title: string;
+  status: string;
+  department_id: string;
+  department_name: string;
+}
+
+export interface RequisitionDetail {
+  id: string;
+  title: string;
+  status: string;
+  version: number;
+  department_id: string;
+}
+
+export interface JobDescriptionDetail {
+  id: string;
+  title: string;
+  raw_text: string;
+  required_skills: string[];
+  preferred_skills: string[];
+  min_years_experience: number;
+}
+
+export interface QuestionnaireQuestion {
+  id: string;
+  prompt: string;
+  type: "multiple_choice" | "yes_no" | "rating" | "long_text" | "short_text" | "file_upload";
+  required?: boolean;
+  options?: string[];
+}
+
+export interface QuestionnaireSummary {
+  id: string;
+  title: string;
+  question_count: number;
+}
+
+export interface QuestionnaireEvaluation {
+  overall_score: number;
+  recommendation: "proceed" | "hold" | "reject";
+  inconsistencies: string[];
+  missing_critical_info: string[];
+  rationale: string;
+  confidence: number;
+  cited_span_ids: string[];
+}
+
+export interface QuestionnaireResponseSummary {
+  id: string;
+  candidate_email: string | null;
+  submitted: boolean;
+  submitted_at: string | null;
+  missing_required: string[];
+  history_entries: number;
+  answers: Record<string, unknown>;
+  ai_evaluation: QuestionnaireEvaluation | null;
+}
+
+export interface InterviewSlotSummary {
+  id: string;
+  start_at: string;
+  end_at: string;
+  status: string;
+  booked_for_email: string | null;
+}
+
 const API_BASE = "/api";
 
 export class ApiError extends Error {
@@ -183,8 +256,29 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
-export function login(email: string, password: string): Promise<LoginResponse> {
-  return postJson<LoginResponse>("/auth/login", { email, password });
+export function login(
+  email: string,
+  password: string,
+  totpCode?: string,
+): Promise<LoginResponse> {
+  return postJson<LoginResponse>("/auth/login", {
+    email,
+    password,
+    ...(totpCode ? { totp_code: totpCode } : {}),
+  });
+}
+
+export interface MfaEnrollResponse {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export function enrollMfa(): Promise<MfaEnrollResponse> {
+  return postJson("/auth/mfa/enroll", {});
+}
+
+export function activateMfa(code: string): Promise<{ status: string }> {
+  return postJson("/auth/mfa/activate", { code });
 }
 
 export interface CurrentUser {
@@ -303,6 +397,175 @@ export async function getLatestEvaluation(
     if (cause instanceof ApiError && cause.status === 404) return null;
     throw cause;
   }
+}
+
+// --- Org / departments / requisitions ---
+
+export function listDepartments(organizationId: string): Promise<{ departments: Department[] }> {
+  return request(`/orgs/${organizationId}/departments`);
+}
+
+export function createDepartment(organizationId: string, name: string): Promise<Department> {
+  return postJson(`/orgs/${organizationId}/departments`, { name });
+}
+
+export function listRequisitions(
+  organizationId: string,
+): Promise<{ requisitions: RequisitionSummary[] }> {
+  return request(`/orgs/${organizationId}/requisitions`);
+}
+
+export function createRequisition(
+  departmentId: string,
+  title: string,
+): Promise<RequisitionDetail> {
+  return postJson(`/departments/${departmentId}/requisitions`, {
+    title,
+    department_id: departmentId,
+  });
+}
+
+export function getRequisition(requisitionId: string): Promise<RequisitionDetail> {
+  return request(`/requisitions/${requisitionId}`);
+}
+
+// --- Job descriptions ---
+
+export function getJobDescription(
+  requisitionId: string,
+): Promise<JobDescriptionDetail | null> {
+  return request(`/requisitions/${requisitionId}/job-description`);
+}
+
+export function createJobDescription(
+  requisitionId: string,
+  body: {
+    title: string;
+    raw_text: string;
+    required_skills: string[];
+    preferred_skills: string[];
+    min_years_experience: number;
+  },
+): Promise<{ id: string; title: string }> {
+  return postJson(`/requisitions/${requisitionId}/job-description`, body);
+}
+
+// --- Resume upload + scoring ---
+
+export async function uploadResume(
+  requisitionId: string,
+  file: File,
+): Promise<{ id: string; field_count: number; page_count: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE}/requisitions/${requisitionId}/resumes`, {
+    method: "POST",
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form,
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, (await response.text()).slice(0, 300));
+  }
+  return (await response.json()) as { id: string; field_count: number; page_count: number };
+}
+
+export function createWeightProfile(
+  requisitionId: string,
+  body: {
+    name: string;
+    weights: Record<string, number>;
+    auto_reject_below: number;
+    hold_below: number;
+    highly_recommended_at: number;
+  },
+): Promise<{ id: string }> {
+  return postJson(`/requisitions/${requisitionId}/weight-profiles`, body);
+}
+
+export function runScoring(
+  requisitionId: string,
+  resumeId: string,
+  weightProfileId: string,
+): Promise<{ id: string; total_score: number; verdict: string }> {
+  return postJson(`/requisitions/${requisitionId}/scoring-runs`, {
+    resume_id: resumeId,
+    weight_profile_id: weightProfileId,
+  });
+}
+
+// --- Questionnaires ---
+
+export function listQuestionnaires(
+  requisitionId: string,
+): Promise<{ questionnaires: QuestionnaireSummary[] }> {
+  return request(`/requisitions/${requisitionId}/questionnaires`);
+}
+
+export function createQuestionnaire(
+  requisitionId: string,
+  title: string,
+  questions: QuestionnaireQuestion[],
+): Promise<{ id: string; question_count: number }> {
+  return postJson(`/requisitions/${requisitionId}/questionnaires`, { title, questions });
+}
+
+export function createQuestionnaireInvite(
+  questionnaireId: string,
+  candidateEmail: string,
+): Promise<{ invite_id: string; token: string; expires_at: string }> {
+  return postJson(`/questionnaires/${questionnaireId}/invites`, {
+    candidate_email: candidateEmail,
+  });
+}
+
+export function listQuestionnaireResponses(
+  requisitionId: string,
+): Promise<{ responses: QuestionnaireResponseSummary[] }> {
+  return request(`/requisitions/${requisitionId}/questionnaire-responses`);
+}
+
+export function evaluateQuestionnaireResponse(
+  responseId: string,
+): Promise<QuestionnaireEvaluation> {
+  return request(`/questionnaire-responses/${responseId}/evaluate`, { method: "POST" });
+}
+
+// --- Scheduling ---
+
+export function generateSlots(
+  requisitionId: string,
+  body: {
+    date_from: string;
+    date_to: string;
+    timezone_name: string;
+    local_start: string;
+    local_end: string;
+    duration_minutes: number;
+    buffer_minutes: number;
+    include_weekends: boolean;
+  },
+): Promise<{ created: number }> {
+  return postJson(`/requisitions/${requisitionId}/slots/generate`, body);
+}
+
+export function listSlots(
+  requisitionId: string,
+): Promise<{ slots: InterviewSlotSummary[] }> {
+  return request(`/requisitions/${requisitionId}/slots`);
+}
+
+export function bookSlot(
+  slotId: string,
+  candidateEmail: string,
+): Promise<{ id: string; status: string; ics: string }> {
+  return postJson(`/slots/${slotId}/book`, { candidate_email: candidateEmail });
+}
+
+export function createInterviewSessionForSlot(
+  slotId: string,
+  resumeId?: string,
+): Promise<{ id: string; token: string }> {
+  return postJson(`/slots/${slotId}/interview-session`, resumeId ? { resume_id: resumeId } : {});
 }
 
 export async function downloadEvaluationExport(

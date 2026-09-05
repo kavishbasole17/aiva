@@ -1,9 +1,11 @@
 # Force LF line endings for all text files regardless of a checkout's local
-# core.autocrlf setting. Without this, a Windows checkout with the common
-# `core.autocrlf=true` default silently rewrites every text file (including
-# scripts/check_no_egress.sh's shell-script inputs and its own
-# infra/egress_allowlist.txt) to CRLF, which breaks that script's regex
-# matching against every allowlist rule at once -- a false result the script
-# gives no indication of, discovered while verifying this change locally on
-# Windows.
+# core.autocrlf setting. Without this, a Windows checkout (git's
+# core.autocrlf=true default there) silently converts these to CRLF, which
+# breaks things in ways that don't announce themselves: a CRLF shebang line
+# makes direct execution (`./script.sh`) fail with a confusing "No such file
+# or directory" naming the interpreter-plus-\r, a CRLF-terminated
+# `set -euo pipefail` line fails with "pipefail: invalid option name", and a
+# CRLF-terminated infra/egress_allowlist.txt breaks scripts/check_no_egress.sh's
+# regex matching against every allowlist rule at once with no visible error
+# -- all found the hard way, verifying changes locally on Windows.
 * text=auto eol=lf

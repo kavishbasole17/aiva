@@ -1,0 +1,10 @@
+apiVersion: v2
+name: aiva
+description: >-
+  AIVA (AI candidate evaluation and interview automation) — FastAPI + React,
+  Anthropic Claude for AI judgement, Postgres/Redis/MinIO for storage. See
+  the repo root README and docs/DECISIONS.md (ADR-030) for what this chart
+  covers and, more importantly, what it does not.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

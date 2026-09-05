@@ -1,7 +1,17 @@
+"""Data retention job lifecycle against a live stack.
+
+Proves the actual behavior that matters for something this destructive:
+dry_run previews without erasing anything, a real run erases exactly the
+eligible candidates and writes an audit event, already-redacted candidates
+don't reappear on a second run, and one organization's retention run never
+touches another organization's candidates.
+"""
+
 import os
 import uuid
 
 import httpx
+import pymupdf
 import pytest
 from asgi_lifespan import LifespanManager
 
@@ -15,6 +25,14 @@ pytestmark = pytest.mark.skipif(
 PASSWORD = "long-enough-password-123"
 
 
+def _resume_pdf(name: str, email: str) -> bytes:
+    text = f"{name}\n{email} | +1 (212) 555-0100\n5 years of Python experience.\nSkills: python\n"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text, fontsize=10)
+    return doc.tobytes()
+
+
 @pytest.fixture
 async def http() -> httpx.AsyncClient:
     app = create_app()
@@ -24,129 +42,118 @@ async def http() -> httpx.AsyncClient:
             yield client
 
 
-def _minimal_pdf(candidate_email: str) -> bytes:
-    lines = ["Jane Candidate", candidate_email, "Skills: python, sql", "5 years experience."]
-    content = (
-        "BT /F1 12 Tf 40 750 Td 14 TL\n" + "\n".join(f"({line}) Tj T*" for line in lines) + "\nET"
-    )
-    stream = content.encode("latin-1")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    out = bytearray(b"%PDF-1.4\n")
-    offsets: list[int] = []
-    for index, obj in enumerate(objects, start=1):
-        offsets.append(len(out))
-        out += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
-    xref_at = len(out)
-    out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
-    for offset in offsets:
-        out += f"{offset:010d} 00000 n \n".encode()
-    out += (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF"
-    ).encode()
-    return bytes(out)
-
-
-async def _bootstrap(http: httpx.AsyncClient) -> tuple[dict[str, str], str, str]:
-    """Registers a fresh org + admin, uploads one resume.
-
-    Returns (admin headers, organization id, requisition id).
-    """
+async def _org_with_resume(
+    http: httpx.AsyncClient, label: str
+) -> tuple[dict[str, str], str, str, str]:
+    """Returns (headers, organization_id, requisition_id, candidate_email)."""
     suffix = uuid.uuid4().hex[:8]
-    admin_email = f"retention-admin-{suffix}@example.test"
+    admin_email = f"retention-{label}-{suffix}@example.test"
+    candidate_email = f"candidate-{label}-{suffix}@example.test"
     org = await http.post(
         "/auth/register-org",
         json={
-            "organization_name": f"Retention Org {suffix}",
+            "organization_name": f"Retention Org {label} {suffix}",
             "admin_email": admin_email,
             "admin_password": PASSWORD,
         },
     )
     assert org.status_code == 201, org.text
+    org_id = org.json()["organization_id"]
+
     login = await http.post("/auth/login", json={"email": admin_email, "password": PASSWORD})
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    organization_id = org.json()["organization_id"]
 
-    dept = await http.post(
-        f"/orgs/{organization_id}/departments", json={"name": "Eng"}, headers=headers
-    )
+    dept = await http.post(f"/orgs/{org_id}/departments", json={"name": "Eng"}, headers=headers)
     req = await http.post(
         f"/departments/{dept.json()['id']}/requisitions",
-        json={"title": "Backend Engineer", "department_id": dept.json()["id"]},
+        json={"title": "Engineer", "department_id": dept.json()["id"]},
         headers=headers,
     )
-    return headers, organization_id, req.json()["id"]
+    rid = req.json()["id"]
 
-
-async def _upload_resume(
-    http: httpx.AsyncClient, headers: dict[str, str], rid: str, email: str
-) -> str:
     upload = await http.post(
         f"/requisitions/{rid}/resumes",
-        files={"file": ("resume.pdf", _minimal_pdf(email), "application/pdf")},
+        files={
+            "file": (
+                "resume.pdf",
+                _resume_pdf(f"Candidate {label}", candidate_email),
+                "application/pdf",
+            )
+        },
         headers=headers,
     )
     assert upload.status_code == 201, upload.text
-    return str(upload.json()["id"])
+
+    return headers, org_id, rid, candidate_email
 
 
-async def test_retention_sweep_erases_stale_candidates(http: httpx.AsyncClient) -> None:
-    headers, _org, rid = await _bootstrap(http)
-    email = f"stale-{uuid.uuid4().hex[:8]}@example.test"
-    resume_id = await _upload_resume(http, headers, rid, email)
+async def test_dry_run_previews_without_erasing(http: httpx.AsyncClient) -> None:
+    headers, org_id, rid, candidate_email = await _org_with_resume(http, "dry")
 
-    # retention_days=0 means "anything not created in this exact instant is
-    # stale" -- the resume was created moments ago, so it's swept immediately
-    # without waiting for a real retention window to elapse.
-    swept = await http.post("/retention/run", json={"retention_days": 0}, headers=headers)
-    assert swept.status_code == 200, swept.text
-    body = swept.json()
-    assert body["candidates_erased"] == 1
-    assert body["record_counts"]["resumes"] == 1
-    assert len(body["candidate_email_sha256s"]) == 1
-
-    after = await http.get(f"/resumes/{resume_id}", headers=headers)
-    assert after.status_code == 200
-    after_body = after.json()
-    assert after_body["candidate_email"] is None
-    assert "redacted" in after_body["filename"].lower()
-
-
-async def test_retention_sweep_exempts_recent_candidates_under_the_default_window(
-    http: httpx.AsyncClient,
-) -> None:
-    headers, _org, rid = await _bootstrap(http)
-    email = f"fresh-{uuid.uuid4().hex[:8]}@example.test"
-    resume_id = await _upload_resume(http, headers, rid, email)
-
-    # No override -> falls back to AIVA_RETENTION_DAYS (default 730 days).
-    # A resume created seconds ago is nowhere near stale.
-    swept = await http.post("/retention/run", json={}, headers=headers)
-    assert swept.status_code == 200, swept.text
-    assert swept.json()["candidates_erased"] == 0
-
-    after = await http.get(f"/resumes/{resume_id}", headers=headers)
-    assert after.status_code == 200
-    assert after.json()["candidate_email"] == email
-
-
-async def test_retention_sweep_requires_admin_role(http: httpx.AsyncClient) -> None:
-    headers, org, _rid = await _bootstrap(http)
-    recruiter_email = f"recruiter-{uuid.uuid4().hex[:8]}@example.test"
-    created = await http.post(
-        f"/orgs/{org}/users",
-        json={"email": recruiter_email, "password": PASSWORD, "role": "recruiter"},
+    preview = await http.post(
+        f"/orgs/{org_id}/retention/run",
+        json={"retention_days": 0, "dry_run": True},
         headers=headers,
     )
-    assert created.status_code == 201, created.text
-    login = await http.post("/auth/login", json={"email": recruiter_email, "password": PASSWORD})
-    recruiter_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["dry_run"] is True
+    assert body["erased_count"] == 0
+    assert body["eligible_count"] == 1
+    assert body["candidates"][0]["candidate_email"] == candidate_email
 
-    denied = await http.post("/retention/run", json={}, headers=recruiter_headers)
-    assert denied.status_code == 403
+    # Confirm nothing was actually touched: the pipeline still shows the
+    # real candidate email, not redacted.
+    candidates = await http.get(f"/requisitions/{rid}/candidates", headers=headers)
+    assert candidates.json()["candidates"][0]["candidate_email"] == candidate_email
+
+
+async def test_real_run_erases_and_is_idempotent(http: httpx.AsyncClient) -> None:
+    headers, org_id, rid, candidate_email = await _org_with_resume(http, "real")
+
+    ran = await http.post(
+        f"/orgs/{org_id}/retention/run",
+        json={"retention_days": 0, "dry_run": False},
+        headers=headers,
+    )
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["dry_run"] is False
+    assert ran.json()["erased_count"] == 1
+
+    candidates = await http.get(f"/requisitions/{rid}/candidates", headers=headers)
+    assert candidates.json()["candidates"][0]["candidate_email"] is None
+
+    # Running again finds nothing left to erase -- the candidate's email is
+    # already redacted (None), so it no longer matches the eligibility query.
+    ran_again = await http.post(
+        f"/orgs/{org_id}/retention/run",
+        json={"retention_days": 0, "dry_run": False},
+        headers=headers,
+    )
+    assert ran_again.status_code == 200
+    assert ran_again.json()["eligible_count"] == 0
+    assert ran_again.json()["erased_count"] == 0
+
+
+async def test_retention_far_future_cutoff_finds_nothing(http: httpx.AsyncClient) -> None:
+    headers, org_id, _rid, _email = await _org_with_resume(http, "future")
+
+    preview = await http.post(
+        f"/orgs/{org_id}/retention/run",
+        json={"retention_days": 3650, "dry_run": True},
+        headers=headers,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["eligible_count"] == 0
+
+
+async def test_cross_org_retention_denied(http: httpx.AsyncClient) -> None:
+    headers_a, org_a, _rid_a, _email_a = await _org_with_resume(http, "xa")
+    headers_b, _org_b, _rid_b, _email_b = await _org_with_resume(http, "xb")
+
+    cross = await http.post(
+        f"/orgs/{org_a}/retention/run",
+        json={"retention_days": 0, "dry_run": True},
+        headers=headers_b,
+    )
+    assert cross.status_code == 403

@@ -112,13 +112,77 @@ def _drop_privileges(uid: int, gid: int) -> None:
     os.setresuid(uid, uid, uid)
 
 
-def _apply_rlimits(cpu_seconds: int, memory_bytes: int, max_processes: int, max_files: int) -> None:
+def _apply_rlimits(
+    cpu_seconds: int,
+    memory_bytes: int,
+    max_processes: int,
+    max_files: int,
+    rlimit_as_bytes: int,
+) -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-    resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+    # RLIMIT_AS bounds total virtual address space, not heap usage -- a
+    # runtime can need to mmap far more of that than it ever actually uses
+    # (V8/Node reserves substantially more virtual memory than its
+    # `--max-old-space-size` heap cap at startup, before running a single
+    # line of candidate code). Capping RLIMIT_AS at the heap-size value
+    # (memory_bytes) rather than the deliberately larger rlimit_as_bytes
+    # was a real, previously-shipped bug here: V8's startup mmap calls hit
+    # ENOMEM and Node hung until the wall-clock timeout on every single
+    # execution, 100% reproducible, confirmed by testing 128MB (the old,
+    # wrong value) against 768MB (the intended one) directly.
+    resource.setrlimit(resource.RLIMIT_AS, (rlimit_as_bytes, rlimit_as_bytes))
     resource.setrlimit(resource.RLIMIT_NPROC, (max_processes, max_processes))
     resource.setrlimit(resource.RLIMIT_NOFILE, (max_files, max_files))
     resource.setrlimit(resource.RLIMIT_FSIZE, (memory_bytes, memory_bytes))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+#: Cached result of _verify_isolation_available(): None = not checked yet,
+#: True = confirmed working, False = confirmed broken. A module-level cache
+#: because the environment's capability set cannot change between requests
+#: within one running process, and probing costs a real subprocess spawn.
+_isolation_verified: bool | None = None
+
+
+def _verify_isolation_available(unshare: str) -> None:
+    """Actually exercise unshare, not just check the binary exists.
+
+    `unshare --map-root-user --net --pid --fork` can be present yet still
+    fail at run time — no real CAP_SYS_ADMIN and no permission to create an
+    unprivileged user namespace either (seen in practice under some Docker
+    Desktop / non-default container security-opt configurations) — in which
+    case unshare itself exits non-zero with "Operation not permitted"
+    *before ever exec'ing the candidate's code*. Without this check, that
+    failure was indistinguishable from the caller's perspective from the
+    candidate's own code exiting with status 1: same exit code, no isolation
+    breach (unshare failing means nothing ran unisolated), but a materially
+    wrong and misleading result — "your code failed" when the sandbox
+    itself is the thing that's broken. Checked once and cached rather than
+    per-request: the environment doesn't change between requests, and this
+    spawns a real subprocess.
+    """
+    global _isolation_verified
+    if _isolation_verified is True:
+        return
+    if _isolation_verified is False:
+        raise SandboxUnavailableError(
+            "unshare cannot create isolated namespaces in this environment; "
+            "refusing to run code without network/PID isolation rather than "
+            "silently misreport an infrastructure failure as a candidate code failure"
+        )
+    probe = subprocess.run(  # noqa: S603 - fixed argv, never shell-interpreted
+        [unshare, "--map-root-user", "--net", "--pid", "--fork", "--", "true"],
+        capture_output=True,
+        timeout=5,
+    )
+    if probe.returncode != 0:
+        _isolation_verified = False
+        detail = probe.stderr.decode("utf-8", errors="replace").strip()
+        raise SandboxUnavailableError(
+            "unshare is present but failed to create isolated namespaces "
+            f"(likely missing CAP_SYS_ADMIN, or blocked by seccomp/AppArmor): {detail}"
+        )
+    _isolation_verified = True
 
 
 def _isolation_prefix() -> list[str]:
@@ -143,6 +207,7 @@ def _isolation_prefix() -> list[str]:
             "unshare (util-linux) is not available; refusing to run code "
             "without network/PID isolation rather than degrade silently"
         )
+    _verify_isolation_available(unshare)
     return [unshare, "--map-root-user", "--net", "--pid", "--fork", "--"]
 
 
@@ -224,13 +289,24 @@ class _SubprocessExecutor(Executor):
 
             def preexec() -> None:
                 _drop_privileges(sandbox_uid, sandbox_gid)
-                _apply_rlimits(cpu_seconds, self._memory_bytes, max_processes, max_open_files)
+                _apply_rlimits(
+                    cpu_seconds,
+                    self._memory_bytes,
+                    max_processes,
+                    max_open_files,
+                    self._rlimit_as_bytes,
+                )
 
             started = time.monotonic()
             process = subprocess.Popen(  # noqa: S603 - argv is built from a fixed allowlist, never shell-interpreted
                 argv,
                 cwd=tmpdir,
-                env={"PATH": "/usr/bin:/bin", "HOME": str(tmpdir)},
+                # /usr/local/bin first: the official python:3.11-slim base image
+                # (this service's own Dockerfile) installs python3 there, not
+                # /usr/bin -- a bare "python3" in argv_for would silently fail to
+                # resolve without it. Still a fixed, minimal allowlist, not the
+                # caller's real PATH.
+                env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(tmpdir)},
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

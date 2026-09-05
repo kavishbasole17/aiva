@@ -1,0 +1,48 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+  Single host, routes / to web-recruiter only -- web-candidate (the
+  public, token-gated candidate-facing app, a different trust boundary
+  entirely from the staff console) deliberately isn't on this same Ingress
+  object. A real deployment needs its own host/path rule for it (e.g. a
+  separate subdomain) chosen deliberately, not defaulted here to avoid
+  quietly exposing it on whatever `ingress.host` happens to be set to.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "aiva.fullname" . }}
+  labels:
+    {{- include "aiva.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # /api routed straight to the backend Service -- both web apps'
+          # nginx configs also proxy /api themselves (AIVA_API_UPSTREAM), so
+          # this rule is redundant-but-harmless if the Ingress fronts them;
+          # it matters if something bypasses the web pods entirely (a
+          # mobile client, direct API integration).
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aiva.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aiva.fullname" . }}-web-recruiter
+                port:
+                  number: {{ .Values.webRecruiter.port }}
+{{- end }}

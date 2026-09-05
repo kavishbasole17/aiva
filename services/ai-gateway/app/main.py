@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     app.state.settings = settings
     app.state.backend = build_backend(
-        settings.llm_backend, settings.vllm_base_url, settings.vllm_model
+        settings.llm_backend, settings.anthropic_api_key, settings.anthropic_model
     )
     app.state.stt = build_transcriber(settings.stt_backend, settings.stt_model)
     app.state.tts = build_speaker(settings.tts_backend, settings.tts_voice)

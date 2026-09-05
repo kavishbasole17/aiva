@@ -47,6 +47,7 @@ from app.models import (
 )
 from app.precheck import PRECHECK_SUITE_VERSION, PreCheckReport, evaluate_precheck
 from app.questionnaire_service import generate_invite_token, hash_token
+from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
 from app.settings import Settings
 
 router = APIRouter(tags=["interviews"])
@@ -375,8 +376,9 @@ async def _open_question(db: AsyncSession, session: InterviewSession) -> Intervi
 
 
 @router.get("/public/interview-sessions/{raw_token}")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def public_session_state(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    request: Request, raw_token: str, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     session = await _session_by_token(db, raw_token)
     open_turn = None if _terminal(session.status) else await _open_question(db, session)

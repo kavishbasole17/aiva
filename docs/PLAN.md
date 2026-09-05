@@ -9,7 +9,8 @@ fail-closed settings, strict CSP middleware, egress enforcement script (negative
 test proven), GitHub Actions pipeline. All six CI jobs green.
 
 ### Milestone 1 — Design system
-`packages/ui`: tokens.css with atigro.com-sampled brand values (ADR-014), fluid
+`packages/ui`: tokens.css with an original brand palette (ADR-014, rebranded under
+ADR-024), fluid
 type scale, motion tokens + spring constants, ThemeProvider (dark/light),
 `prefers-reduced-motion` collapse, Reveal/PageStagger one-shot scroll primitives,
 ScoreRing spring arc, Button/Input/Textarea/Card/Badge/EmptyState/Skeleton/Field,
@@ -26,22 +27,31 @@ requisition/staff CRUD, hash-chained append-only audit log with verification
 endpoint. Proven in CI integration job: two-org RLS isolation, full role×endpoint
 authorization matrix, refresh replay revocation, MFA flow, chain integrity.
 
-### Milestone 3 — AI gateway (mock-verified; GPU inference deferred to deployment)
+### Milestone 3 — AI gateway (mock-verified for CI; real backend is the Anthropic API, ADR-024)
 
 `services/ai-gateway`: stable typed contract (`DimensionScore`,
 `ResumeFieldExtraction` — every judgement carries rationale, confidence, and
 mandatory cited span ids per constraint 8.1), versioned prompt registry
 (SHA-truncated prompt versions returned with every response), pluggable backends:
-deterministic mock (schema-filling, seed-keyed, CI-safe) and vLLM backend using
-`guided_json` constrained decoding with temperature 0 and pinned seed so schema-
-invalid output is impossible by construction. Golden-set eval harness
+deterministic mock (schema-filling, seed-keyed, CI-safe, no API key needed) and
+`AnthropicBackend`, which forces a `tool_use` call whose `input_schema` is the
+exact response-model schema, so schema-invalid output is impossible by
+construction — the same guarantee an earlier self-hosted-model plan aimed for
+with `guided_json`, without operating any GPU inference (ADR-024 supersedes that
+plan outright, not a deprecation-in-place). Golden-set eval harness
 (`packages/eval`) runs against the live container in CI: schema validity +
-determinism asserted per case. Gateway quality gates green (ruff/black/mypy-strict/
-bandit/pytest); all 7 CI jobs green.
+determinism asserted per case (CI always uses the mock backend, so this needs no
+secret). `test_anthropic_backend.py` proves the real-backend contract by mocking
+the Anthropic SDK client directly: forced tool_choice, schema validation,
+rejection of schema-invalid tool input, rejection of a missing tool_use block.
+Gateway quality gates green (ruff/black/mypy-strict/bandit/pytest); all 7 CI
+jobs green.
 
-Deferred to GPU deployment: pulling Qwen2.5-14B-AWQ weights into the runtime image,
-the §13 `--network none` end-to-end interview proof, and real-model eval thresholds.
-The backend interface does not change when those land.
+Not deterministic the way `MockBackend` is: `temperature=0` gets the Anthropic
+backend close to reproducible, but the hosted API gives no hard seed guarantee —
+documented in ADR-024 rather than silently assumed. Embeddings/STT/TTS are
+unaffected by this milestone's backend swap (Anthropic has no API for either);
+they remain on the mock-now/local-model-later path per ADR-017.
 
 ### Milestone 4 — Resume ingest, matching, weighted scoring
 
@@ -85,9 +95,10 @@ required-answer completeness enforcement on submit, staff-facing response listin
 Public endpoints are token-scoped; completed/expired links return 409/410.
 All 7 CI jobs green.
 
-Deferred within M6: AI evaluation of answers + resume-inconsistency flags (needs M3
-model deployment for meaningful output — the gateway contract exists), candidate
-portal UI pages, file-upload question storage.
+Deferred within M6 originally, since delivered (ADR-033): AI evaluation of answers +
+resume-inconsistency flags, via `POST /questionnaire-responses/{id}/evaluate` —
+was blocked on M3's mock model, unblocked by ADR-024's real Anthropic backend. Still
+deferred: candidate portal UI pages, file-upload question storage.
 
 ### Milestone 7 (core) — DST-correct scheduling + local .ics
 
@@ -102,9 +113,16 @@ with proper escaping and UTC formatting replaces any calendar API per §3. Booki
 endpoint flips slot status with conflict rejection and emits the invite file.
 All 7 CI jobs green.
 
-Deferred within M7: SMTP delivery of `.ics` invites and T-24h/T-1h reminders
-(requires self-hosted Postfix in compose — wired at M12 hardening), candidate-facing
-self-select UI (arrives with portal), interviewer-per-slot caps.
+Deferred within M7 originally, since delivered (ADR-031): email delivery of `.ics`
+invites via a pluggable provider (`app/email.py` — log-only by default, real SMTP
+opt-in), no self-hosted Postfix required (stdlib `smtplib` against any real SMTP
+host/relay instead). T-24h/T-1h reminders, since delivered (ADR-034): `POST
+/orgs/{id}/interview-reminders/run`, an idempotent endpoint a real scheduler (cron,
+systemd timer, K8s CronJob) invokes periodically -- same "expose the endpoint, the
+deployer wires the cadence" shape as retention, without automating a policy the
+codebase can't fully validate the way retention's active-pipeline gap would have.
+Still deferred: candidate-facing self-select UI (the actual booking endpoint is
+staff-only by design, ADR-026), interviewer-per-slot caps.
 
 ### Milestone 8 (core) — Interview sessions: consent, device pre-check, adaptive STT/TTS loop, HUD
 
@@ -307,28 +325,32 @@ milestone was called done (ADR-022). All quality gates green
 
 | # | Milestone | Depends on |
 |---|---|---|
-| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 |
+| M12 | Load test, pen-test pass, retention jobs, Helm chart | M11 — 3 of 4 have a first pass delivered; pen-test pass remains fully open |
 
-### Milestone 12 progress — retention jobs (partial; load test/pen-test/Helm chart not started)
-
-`app/dsar_service.py` extracts the candidate-record lookup and PII erasure logic
-`routers_dsar.py` already had (behavior-preserving refactor, existing DSAR tests
-unchanged) so it can be driven by more than one trigger. `app/retention.py` adds
-`run_retention_sweep()`: age-based erasure using that same logic — a candidate is
-swept only once every known record (resume, questionnaire invite, interview
-session, evaluation report) predates a cutoff, computed from whichever of those
-is *most* recent (`latest_activity_at()`), not each row's own age. `POST
-/retention/run` (admin-only, same role gate as `/dsar/*`) exposes it, with a new
-`AIVA_RETENTION_DAYS` setting (default 730) and a per-call override for a
-tighter one-off sweep. See ADR-024 for why this reuses DSAR's erasure path
-instead of a new deletion mechanism, and why the trigger is a manual/admin
-endpoint rather than a schedule — no worker or Helm CronJob exists yet to hang
-a clock off. `test_retention_unit.py` covers `latest_activity_at()`'s "most
-recent wins" logic directly; `test_integration_retention.py` proves the sweep
-end-to-end against the live stack (a stale candidate is erased, a fresh one is
-exempt under the default window, non-admin is rejected) and is wired into the
-CI integration job alongside `test_integration_m11.py`.
-Not started within M12: load testing, the pen-test pass, and the Helm chart.
+M12 progress: **retention jobs (core, delivered)** — `POST /orgs/{id}/retention/run`
+built on the existing DSAR erasure logic, dry-run by default, org-scoped, verified
+against a live stack (ADR-029). Not built: the scheduler that would invoke it
+automatically (cron/systemd timer/K8s CronJob — an infrastructure choice for the
+deployment target, which doesn't exist yet since the Helm chart below doesn't either).
+**Load test (first pass)** — `scripts/load_test.py`, stdlib-only, run against a live
+instance with rate limiting disabled: ~190 req/s at concurrency 20 and ~290 req/s at
+concurrency 60 on a single-container dev-machine deployment, zero errors at either
+level, p99 latency climbing from ~100-400ms to ~550ms-1.6s between the two — see
+RUNBOOK.md's Load testing section for the full numbers and what this run does and
+does not establish (a first data point on one dev machine, not a production capacity
+number or a sustained-load result).
+**Helm chart (first draft, delivered)** — `infra/helm/aiva`, covering all five
+app-tier services plus optional bundled Postgres/Redis/MinIO, Secret, Ingress, and a
+NetworkPolicy scoping sandbox-runner. Required containerizing the frontend for the
+first time (`apps/web-recruiter`/`apps/web-candidate` had no Dockerfile at all before
+this — see ADR-030), now also wired into `compose.yaml`. `helm lint`/`helm template`
+both pass, including with the bundled data stores toggled off — but no Kubernetes
+cluster was available to actually `helm install` against, so real-cluster deployment
+is unverified; treated and documented as such, not claimed as proven (ADR-030).
+Still fully open: a real pen-test pass (a security review of new/changed code happened
+repeatedly throughout this session's work and found real issues each time — ADR-027,
+ADR-028 — but that is not the same thing as a dedicated penetration test of the whole
+system).
 
 ## Known open items carried forward
 
@@ -336,14 +358,26 @@ Not started within M12: load testing, the pen-test pass, and the Helm chart.
   machine (previously only proven via the CI integration job): `docker compose
   up -d` for postgres/redis/minio/ai-gateway/sandbox-runner, `alembic upgrade
   head`, `uvicorn app.main:app` for the API, and `npm run dev` for both
-  frontend apps all run and talk to each other locally end-to-end (verified
-  while building the M12 retention slice above). One environment-specific
-  wrinkle, not a project issue: pnpm's Windows shim cannot run with a UNC
-  (`\\wsl.localhost\...`) working directory, so `pnpm install` and both
-  frontend dev servers were run from a native path inside the WSL distro
-  instead (a portable Linux Node.js toolchain under `~/.local`, since the
-  distro's own Node was missing and `pacman` needs an interactive sudo
-  password) — this doesn't affect CI or a normal single-OS dev setup.
+  frontend apps all run and talk to each other locally end-to-end. One
+  environment-specific wrinkle, not a project issue: pnpm's Windows shim
+  cannot run with a UNC (`\\wsl.localhost\...`) working directory, so `pnpm
+  install` and both frontend dev servers were run from a native path inside
+  the WSL distro instead (a portable Linux Node.js toolchain under
+  `~/.local`, since the distro's own Node was missing and `pacman` needs an
+  interactive sudo password) — this doesn't affect CI or a normal single-OS
+  dev setup.
+- Docker Desktop (Windows host, WSL2 backend) is available and the full compose
+  stack runs and has been verified end to end against it repeatedly (fresh
+  volumes, full migration chain 0001→0013, `wait_ready.sh`, and the complete
+  domain-lifecycle integration suite: auth/resume/questionnaire/scheduling/
+  interview/workspace/faq/evaluation/m11). **All 33 integration tests now
+  pass, including sandbox code execution** — see ADR-028 for the three real
+  bugs (missing `CAP_SYS_ADMIN`, a restricted-`PATH` gap, and an unused-field
+  bug that capped Node's virtual memory 6x too low) found and fixed to get
+  there. This was previously logged here as an unresolved, environment-specific
+  anomaly ("empty stdout / nonzero exit from sandbox-runner... unconfirmed as
+  a root cause") — it was not environment-specific and not unconfirmable; it
+  just hadn't been root-caused yet.
 - Coverage thresholds and golden-set content begin at M4 when scoring logic exists.
 - MinIO server-side encryption wires into KES/Vault at production hardening (ADR-008).
 

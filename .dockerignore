@@ -1,0 +1,14 @@
+# Applies to every `docker build` in this repo regardless of which
+# Dockerfile/context is used. node_modules in particular breaks the
+# web-recruiter/web-candidate Docker build context transfer outright (pnpm
+# workspace symlinks confuse it) as well as being pointless bloat -- both
+# Dockerfiles run their own `pnpm install` inside the image.
+node_modules
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.egg-info
+.git
+.mypy_cache
+.ruff_cache

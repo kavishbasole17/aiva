@@ -92,6 +92,39 @@ bandit -c pyproject.toml -r apps/api/app
 pytest apps/api/tests            # unit; integration needs AIVA_INTEGRATION=1 + live stack
 ```
 
+## Load testing
+
+```bash
+AIVA_ENVIRONMENT=test docker compose up -d --build   # disables rate limiting (ADR-025);
+                                                       # see scripts/load_test.py's docstring
+                                                       # for why that matters for this measurement
+scripts/wait_ready.sh
+python3 -m alembic -c apps/api/alembic.ini upgrade head   # or the usual apps/api migrate step
+python3 scripts/load_test.py --base-url http://localhost:18000 --concurrency 20 --requests 300
+```
+
+Stdlib-only (`urllib` + `concurrent.futures`), no venv/dependency install needed.
+Measures raw API serving capacity against a handful of representative
+authenticated GET endpoints (`/healthz`, list requisitions, list candidates,
+`/me`) — deliberately not the AI-gateway or sandbox-runner paths, whose real
+latency (a Claude API round-trip; spinning up an isolated process) is a
+different thing to characterize than millisecond-scale CRUD reads, and
+mixing them into one percentile distribution would mislead more than it
+informs.
+
+Baseline captured on this session's dev machine (single `docker compose`
+instance — one API container, one Postgres, no horizontal scaling; treat as
+a relative baseline for regression-spotting, not a production capacity
+number for a different host): at concurrency 20, ~190 req/s, zero errors,
+p99 latency 107–386ms across the four endpoints. At concurrency 60,
+throughput rose to ~290 req/s, still zero errors, but p99 latency rose to
+545ms–1.6s — the service degrades gracefully (no failures) rather than
+falling over, but individual request latency is clearly where the ceiling
+shows up first on a single instance. Not yet done: a sustained-load run
+(minutes, not seconds), a realistic traffic-mix profile, and a run against
+a production-shaped (multi-instance, real hardware) deployment — this is a
+first data point, not a capacity-planning number.
+
 ## Model operations
 
 Model inventory, licences, swap procedure: see MODEL_CARD.md (populated at M3).

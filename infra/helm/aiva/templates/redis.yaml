@@ -1,0 +1,59 @@
+{{- if .Values.redis.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aiva.fullname" . }}-redis
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "redis" "Release" .Release) | nindent 4 }}
+spec:
+  serviceName: {{ include "aiva.fullname" . }}-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiva.componentLabels" (dict "component" "redis" "Release" .Release) | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          command: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.redis.storageSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiva.fullname" . }}-redis
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "redis" "Release" .Release) | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: 6379
+{{- end }}

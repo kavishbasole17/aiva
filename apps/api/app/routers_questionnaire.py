@@ -2,20 +2,25 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_event
-from app.deps import get_db, require_roles
+from app.deps import get_app_settings, get_db, get_email_provider, require_roles
+from app.email import EmailProvider
 from app.models import (
     Department,
+    ExtractedFieldRow,
+    JobDescription,
     Questionnaire,
     QuestionnaireInvite,
     QuestionnaireResponse,
     Requisition,
+    ResumeDocument,
     Role,
     User,
     utcnow,
@@ -26,15 +31,11 @@ from app.questionnaire_service import (
     missing_required_answers,
     validate_questions,
 )
+from app.rate_limit import PUBLIC_ENDPOINT_LIMIT, limiter
+from app.settings import Settings
 from app.validation import EmailAddress
 
 router = APIRouter(tags=["questionnaires"])
-
-
-def get_app_settings_days() -> int:
-    from app.settings import get_settings
-
-    return get_settings().invite_token_days
 
 
 EDIT_ROLES = (Role.ADMIN.value, Role.HIRING_MANAGER.value, Role.RECRUITER.value)
@@ -98,6 +99,32 @@ async def create_questionnaire(
     return {"id": str(questionnaire.id), "question_count": len(body.questions)}
 
 
+@router.get("/requisitions/{requisition_id}/questionnaires")
+async def list_questionnaires(
+    requisition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    await _load_requisition(db, user, requisition_id)
+    rows = (
+        (
+            await db.execute(
+                select(Questionnaire)
+                .where(Questionnaire.requisition_id == requisition_id)
+                .order_by(Questionnaire.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "questionnaires": [
+            {"id": str(row.id), "title": row.title, "question_count": len(row.questions)}
+            for row in rows
+        ]
+    }
+
+
 class QuestionnaireClone(BaseModel):
     target_requisition_id: uuid.UUID
 
@@ -152,14 +179,18 @@ async def create_invite(
     body: InviteCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_roles(*EDIT_ROLES)),
+    email: EmailProvider = Depends(get_email_provider),
 ) -> dict[str, object]:
+    from app.settings import get_settings
+
     questionnaire = (
         await db.execute(select(Questionnaire).where(Questionnaire.id == questionnaire_id))
     ).scalar_one_or_none()
     if questionnaire is None or questionnaire.organization_id != user.organization_id:
         raise HTTPException(status_code=404, detail="Questionnaire not found")
 
-    days = get_app_settings_days()
+    settings = get_settings()
+    days = settings.invite_token_days
 
     raw, digest = generate_invite_token()
     invite = QuestionnaireInvite(
@@ -180,6 +211,16 @@ async def create_invite(
         organization_id=user.organization_id,
         payload={"candidate_email": invite.candidate_email},
     )
+    portal_link = f"{settings.candidate_portal_url}/questionnaire/{raw}"
+    await email.send(
+        to=invite.candidate_email,
+        subject=f"{questionnaire.title} — action needed",
+        body=(
+            f"You've been invited to complete a short questionnaire: {questionnaire.title}.\n\n"
+            f"{portal_link}\n\n"
+            f"This link expires in {days} days and can only be used once."
+        ),
+    )
     return {
         "invite_id": str(invite.id),
         "token": raw,
@@ -188,8 +229,9 @@ async def create_invite(
 
 
 @router.get("/public/questionnaires/{raw_token}")
+@limiter.limit(PUBLIC_ENDPOINT_LIMIT)
 async def get_public_questionnaire(
-    raw_token: str, db: AsyncSession = Depends(get_db)
+    request: Request, raw_token: str, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
     invite = (
         await db.execute(
@@ -299,29 +341,153 @@ async def list_responses(
 ) -> dict[str, object]:
     await _load_requisition(db, user, requisition_id)
     rows = (
-        (
-            await db.execute(
-                select(QuestionnaireResponse)
-                .join(
-                    QuestionnaireInvite, QuestionnaireInvite.id == QuestionnaireResponse.invite_id
-                )
-                .join(Questionnaire, Questionnaire.id == QuestionnaireInvite.questionnaire_id)
-                .where(Questionnaire.requisition_id == requisition_id)
-                .order_by(QuestionnaireResponse.updated_at.desc())
-            )
+        await db.execute(
+            select(QuestionnaireResponse, QuestionnaireInvite.candidate_email)
+            .join(QuestionnaireInvite, QuestionnaireInvite.id == QuestionnaireResponse.invite_id)
+            .join(Questionnaire, Questionnaire.id == QuestionnaireInvite.questionnaire_id)
+            .where(Questionnaire.requisition_id == requisition_id)
+            .order_by(QuestionnaireResponse.updated_at.desc())
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     return {
         "responses": [
             {
                 "id": str(row.id),
+                "candidate_email": candidate_email,
                 "submitted": row.submitted,
                 "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
                 "missing_required": row.missing_required,
                 "history_entries": len(row.history),
+                "answers": row.answers,
+                "ai_evaluation": row.ai_evaluation,
             }
-            for row in rows
+            for row, candidate_email in rows
         ]
     }
+
+
+async def _gateway_questionnaire_evaluation(
+    settings: Settings,
+    jd_clause: str,
+    qa_pairs: str,
+    resume_spans: str,
+    seed_key: str,
+) -> dict[str, object]:
+    if not settings.ai_gateway_url:
+        raise HTTPException(status_code=503, detail="AI gateway not configured")
+    try:
+        async with httpx.AsyncClient(base_url=settings.ai_gateway_url, timeout=30.0) as client:
+            response = await client.post(
+                "/v1/generate",
+                json={
+                    "prompt_id": "questionnaire_evaluation",
+                    "response_model": "QuestionnaireEvaluation",
+                    "inputs": {
+                        "jd_clause": jd_clause,
+                        "qa_pairs": qa_pairs,
+                        "resume_spans": resume_spans,
+                    },
+                    "seed_key": seed_key,
+                },
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"AI gateway call failed: {exc}") from exc
+    return dict(response.json()["data"])
+
+
+@router.post("/questionnaire-responses/{response_id}/evaluate")
+async def evaluate_response(
+    response_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    """AI evaluation of a submitted questionnaire: overall score, a
+    recommendation, inconsistencies against the candidate's resume (best-
+    effort matched by email within the same organization -- there is no
+    direct resume_id link on a questionnaire response), and missing
+    critical information. Explicitly scoped out of Milestone 6 pending a
+    real AI model; unblocked by ADR-024, delivered here (ADR-033)."""
+    row = (
+        await db.execute(
+            select(QuestionnaireResponse, QuestionnaireInvite, Questionnaire)
+            .join(QuestionnaireInvite, QuestionnaireInvite.id == QuestionnaireResponse.invite_id)
+            .join(Questionnaire, Questionnaire.id == QuestionnaireInvite.questionnaire_id)
+            .where(QuestionnaireResponse.id == response_id)
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Response not found")
+    response_row, invite, questionnaire = row
+    if response_row.organization_id != user.organization_id:
+        raise HTTPException(status_code=404, detail="Response not found")
+    if not response_row.submitted:
+        raise HTTPException(status_code=409, detail="Response has not been submitted yet")
+
+    questions_by_id = {q["id"]: q for q in questionnaire.questions}
+    qa_lines = []
+    for question_id, answer in response_row.answers.items():
+        prompt_text = questions_by_id.get(question_id, {}).get("prompt", question_id)
+        qa_lines.append(f"{question_id}: {prompt_text} -> {answer}")
+    qa_pairs = "\n".join(qa_lines) or "(no answers recorded)"
+
+    jd = (
+        await db.execute(
+            select(JobDescription)
+            .where(JobDescription.requisition_id == questionnaire.requisition_id)
+            .order_by(JobDescription.version.desc(), JobDescription.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    jd_clause = jd.raw_text[:500] if jd else ""
+
+    # Best-effort resume match: no direct FK from a questionnaire response
+    # to a resume, so match by candidate email within the same org, same
+    # pattern DSAR/retention already use for the same reason.
+    resume = (
+        (
+            await db.execute(
+                select(ResumeDocument).where(
+                    ResumeDocument.organization_id == user.organization_id,
+                    ResumeDocument.candidate_email == invite.candidate_email,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    resume_spans = ""
+    if resume is not None:
+        fields = (
+            (
+                await db.execute(
+                    select(ExtractedFieldRow).where(ExtractedFieldRow.resume_id == resume.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        resume_spans = "\n".join(f"{f.field_name}: {f.source_quote}" for f in fields[:12])
+
+    settings = get_app_settings(request)
+    evaluation = await _gateway_questionnaire_evaluation(
+        settings,
+        jd_clause,
+        qa_pairs,
+        resume_spans,
+        seed_key=f"{response_id}:{response_row.updated_at.isoformat()}",
+    )
+
+    response_row.ai_evaluation = evaluation
+    await record_event(
+        db,
+        action="questionnaire_response.evaluated",
+        entity_type="questionnaire_response",
+        entity_id=response_row.id,
+        actor_id=user.id,
+        organization_id=user.organization_id,
+        payload={"recommendation": evaluation.get("recommendation")},
+    )
+    await db.flush()
+    return evaluation

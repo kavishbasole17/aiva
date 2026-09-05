@@ -1,5 +1,11 @@
 import { forwardRef } from "react";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from "react";
 
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -18,7 +24,7 @@ const buttonStyles: Record<ButtonVariant, string> = {
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
-  /** Trailing arrow affordance, e.g. Atigro-style feature-card CTAs. */
+  /** Trailing arrow affordance for feature-card CTAs. */
   arrow?: boolean;
 }
 
@@ -98,6 +104,26 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   function Textarea({ className, ...rest }, ref) {
     return <textarea ref={ref} className={cn(controlClasses, "min-h-24 resize-y", className)} {...rest} />;
+  },
+);
+
+export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
+  function Select({ className, children, ...rest }, ref) {
+    return (
+      <select
+        ref={ref}
+        className={cn(controlClasses, "min-h-11 appearance-none bg-no-repeat pr-9", className)}
+        style={{
+          backgroundImage:
+            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238fa3bc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E\")",
+          backgroundPosition: "right 0.75rem center",
+          backgroundSize: "1rem",
+        }}
+        {...rest}
+      >
+        {children}
+      </select>
+    );
   },
 );
 

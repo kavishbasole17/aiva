@@ -31,6 +31,8 @@ dependencies = [
     # (same "works on the CI host, breaks in the real container" class of
     # gap already caught once for python-multipart/httpx above).
     "tzdata>=2024.2",
+    "cryptography>=43,<44",
+    "slowapi>=0.1.9,<0.2",
 ]
 
 [project.optional-dependencies]

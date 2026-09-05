@@ -1,5 +1,4 @@
 import hashlib
-import json
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, ValidationError
@@ -28,7 +27,18 @@ def _deterministic_fill(
         spec_dict: dict[str, object] = spec  # type: ignore[assignment]
         field_type = str(spec_dict.get("type", "string"))
         byte = seed_bytes[index % len(seed_bytes)]
-        if name == "confidence":
+        enum_values = spec_dict.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            # A Literal/enum-constrained field (e.g. a fixed set of
+            # recommendation verdicts): the generic string branch below
+            # would synthesize a value matching no allowed choice, failing
+            # this same model's own validation a few lines later. Picking
+            # deterministically from the real allowed set keeps the mock
+            # backend's "byte-seeded but always schema-valid" guarantee
+            # intact for any current or future enum-typed contract field,
+            # not just recommendation specifically.
+            filled[name] = enum_values[byte % len(enum_values)]
+        elif name == "confidence":
             filled[name] = round(0.5 + (byte / 510), 2)
         elif field_type == "integer":
             minimum_raw = spec_dict.get("minimum", 0)
@@ -92,10 +102,29 @@ class MockBackend(Backend):
         return validated.model_dump(), self.model_id
 
 
-class VllmBackend(Backend):
-    def __init__(self, base_url: str, model: str) -> None:
-        self.base_url = base_url.rstrip("/")
+class AnthropicBackend(Backend):
+    """Real inference via the hosted Anthropic API.
+
+    Replaces the previous hand-rolled local/self-hosted model path (a bespoke
+    vLLM client expecting operator-managed GPU weights). Structured output is
+    obtained the same way `VllmBackend` used `guided_json`: the response
+    model's JSON schema is registered as a single forced tool, so the model's
+    only possible reply is a schema-shaped `tool_use` block — no free-text
+    parsing, no "hope it's valid JSON." Pydantic validates the tool input
+    before it's ever trusted (ADR-024).
+
+    Determinism note: `temperature=0` makes output *close to* deterministic
+    but the hosted API gives no hard reproducibility guarantee the way a
+    pinned local weight + fixed seed would. Unlike `MockBackend`, repeated
+    calls are not guaranteed byte-identical — documented honestly rather than
+    faked, same discipline as every other capability gap in this repo.
+    """
+
+    def __init__(self, api_key: str, model: str) -> None:
+        if not api_key:
+            raise ValueError("AIVA_GATEWAY_ANTHROPIC_API_KEY required for anthropic backend")
         self.model = model
+        self._api_key = api_key
 
     @property
     def model_id(self) -> str:
@@ -108,50 +137,55 @@ class VllmBackend(Backend):
         seed_key: str,
         inputs: dict[str, str] | None = None,
     ) -> tuple[dict[str, object], str]:
-        del inputs
-        import httpx
+        del inputs, seed_key
+        from anthropic import AsyncAnthropic
 
         model_type = get_response_model(response_model_name)
-        guided_schema = json.dumps(model_type.model_json_schema())
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": rendered_prompt}],
-            "temperature": 0,
-            "seed": int(hashlib.sha256(seed_key.encode()).hexdigest()[:8], 16),
-            "guided_json": guided_schema,
-        }
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(f"{self.base_url}/v1/chat/completions", json=payload)
-            response.raise_for_status()
-            body = response.json()
+        schema = model_type.model_json_schema()
+        tool_name = f"emit_{response_model_name.lower()}"
 
-        content = body["choices"][0]["message"]["content"]
+        client = AsyncAnthropic(api_key=self._api_key)
         try:
-            parsed: dict[str, object] = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("Model returned non-JSON despite guided decoding") from exc
+            response = await client.messages.create(
+                model=self.model,
+                max_tokens=2048,
+                temperature=0,
+                messages=[{"role": "user", "content": rendered_prompt}],
+                tools=[
+                    {
+                        "name": tool_name,
+                        "description": f"Emit a {response_model_name} judgement.",
+                        "input_schema": schema,
+                    }
+                ],
+                tool_choice={"type": "tool", "name": tool_name},
+            )
+        finally:
+            await client.close()
+
+        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
+        if tool_use is None:
+            raise RuntimeError("Anthropic response contained no tool_use block")
         try:
-            validated = model_type.model_validate(parsed)
+            validated = model_type.model_validate(tool_use.input)
         except ValidationError as exc:
             raise RuntimeError(f"Schema-invalid model output: {exc}") from exc
         return validated.model_dump(), self.model_id
 
 
-def build_backend(backend_name: str, vllm_base_url: str, vllm_model: str) -> Backend:
+def build_backend(backend_name: str, anthropic_api_key: str, anthropic_model: str) -> Backend:
     if backend_name == "mock":
         return MockBackend()
-    if backend_name == "vllm":
-        if not vllm_base_url:
-            raise ValueError("AIVA_GATEWAY_VLLM_BASE_URL required for vllm backend")
-        return VllmBackend(vllm_base_url, vllm_model)
+    if backend_name == "anthropic":
+        return AnthropicBackend(anthropic_api_key, anthropic_model)
     raise ValueError(f"Unknown backend: {backend_name}")
 
 
 __all__ = [
+    "AnthropicBackend",
     "Backend",
     "GenerationResult",
     "MockBackend",
     "PromptRegistry",
-    "VllmBackend",
     "build_backend",
 ]

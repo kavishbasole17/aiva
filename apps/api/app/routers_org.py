@@ -100,6 +100,58 @@ async def create_staff_user(
     return {"id": str(staff.id), "email": staff.email, "role": staff.role}
 
 
+@router.get("/orgs/{organization_id}/departments")
+async def list_departments(
+    organization_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    if user.organization_id != organization_id:
+        raise HTTPException(status_code=403, detail="Cross-organization access denied")
+    rows = (
+        (
+            await db.execute(
+                select(Department)
+                .where(Department.organization_id == organization_id)
+                .order_by(Department.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {"departments": [{"id": str(row.id), "name": row.name} for row in rows]}
+
+
+@router.get("/orgs/{organization_id}/requisitions")
+async def list_requisitions(
+    organization_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> dict[str, object]:
+    if user.organization_id != organization_id:
+        raise HTTPException(status_code=403, detail="Cross-organization access denied")
+    rows = (
+        await db.execute(
+            select(Requisition, Department.name)
+            .join(Department, Department.id == Requisition.department_id)
+            .where(Department.organization_id == organization_id)
+            .order_by(Requisition.created_at.desc())
+        )
+    ).all()
+    return {
+        "requisitions": [
+            {
+                "id": str(req.id),
+                "title": req.title,
+                "status": req.status,
+                "department_id": str(req.department_id),
+                "department_name": dept_name,
+            }
+            for req, dept_name in rows
+        ]
+    }
+
+
 @router.post("/orgs/{organization_id}/departments", status_code=201)
 async def create_department(
     organization_id: uuid.UUID,

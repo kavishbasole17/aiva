@@ -1,32 +1,21 @@
-"""Redis-backed fixed-window rate limiting for brute-force-sensitive endpoints.
+"""Rate limiting (slowapi/limits, in-memory — swappable for a Redis storage
+backend at scale via `Limiter(storage_uri=...)`, not needed at this size).
 
-M12 pen-test finding: `/auth/login` had no limit at all on failed attempts --
-argon2 hashing slows a single guess down but does not make credential
-stuffing or a targeted password-guessing attack impossible. This is
-deliberately a simple fixed-window failure counter (INCR + EXPIRE-once), not
-a sliding-window or token-bucket algorithm: exact precision at the window
-boundary isn't the goal, making unlimited guessing impossible is. It counts
-only *failures*, not every attempt, so a legitimate user is never penalized
-by their own successful logins.
+A conservative default applies to every route; auth endpoints (the classic
+brute-force target) and public token-gated candidate endpoints (unauthenticated
+by design, so a token itself is the only secret — worth extra protection
+against brute-forcing/enumeration) get stricter explicit limits at their
+router. IP-based (`get_remote_address`): behind a reverse proxy, configure it
+to set a trusted `X-Forwarded-For` and swap the key function accordingly —
+not needed for direct-exposure dev/demo deployment.
 """
 
-from redis.asyncio import Redis
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
-async def record_failure(redis: Redis, key: str, window_seconds: int) -> int:
-    count: int = await redis.incr(key)
-    if count == 1:
-        await redis.expire(key, window_seconds)
-    return count
-
-
-async def failure_count(redis: Redis, key: str) -> int:
-    value = await redis.get(key)
-    return int(value) if value else 0
-
-
-async def clear_failures(redis: Redis, key: str) -> None:
-    await redis.delete(key)
-
-
-__all__ = ["clear_failures", "failure_count", "record_failure"]
+AUTH_LOGIN_LIMIT = "10/minute"
+AUTH_REGISTER_LIMIT = "5/minute"
+AUTH_REFRESH_LIMIT = "30/minute"
+PUBLIC_ENDPOINT_LIMIT = "30/minute"

@@ -4,12 +4,11 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import bind_rls_context
-from app.health import Dependencies
+from app.email import EmailProvider
 from app.models import User
 from app.settings import Settings
 
@@ -21,9 +20,9 @@ def get_app_settings(request: Request) -> Settings:
     return settings
 
 
-def get_redis(request: Request) -> Redis:
-    deps: Dependencies = request.app.state.deps
-    return deps.redis
+def get_email_provider(request: Request) -> EmailProvider:
+    provider: EmailProvider = request.app.state.email
+    return provider
 
 
 def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:

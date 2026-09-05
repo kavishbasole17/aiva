@@ -1,7 +1,11 @@
 # AIVA
 
-Air-gapped AI candidate evaluation and interview automation. On-premise, zero external
-runtime network calls, every model served locally.
+AI candidate evaluation and interview automation, built on FastAPI + React. AI
+judgement (resume scoring, questionnaire evaluation, interview question
+generation, evaluation reports) runs on the real Anthropic Claude API via a
+single internal gateway (`services/ai-gateway`) — no self-hosted model, no GPU
+to operate. See ADR-024 for why the earlier plan (a hand-rolled local/self-hosted
+LLM serving layer) was dropped in favor of this.
 
 ## Status
 
@@ -22,10 +26,12 @@ are all built and working end to end against a live stack. Only Milestone
 12 (load test, pen-test pass, retention jobs, Helm chart — production
 hardening) has not started. Governance docs:
 `docs/PLAN.md` (build order and verification evidence), `docs/DECISIONS.md`
-(architecture decision records), `docs/RUNBOOK.md` (day-2 operations), and
-`docs/MODEL_CARD.md` (AI model inventory — still mostly empty since no real
-model is deployed yet; everything runs on deterministic mocks pending GPU
-hardware).
+(architecture decision records, including ADR-024 — the switch to the
+Anthropic API and the branding rebrand away from an earlier reference site),
+`docs/RUNBOOK.md` (day-2 operations), and `docs/MODEL_CARD.md` (AI model
+inventory — LLM reasoning now runs on the real Anthropic API when configured;
+embeddings/STT/TTS remain deterministic mocks pending a local-model
+deployment, since Anthropic has no embedding or speech API).
 
 ## Repository layout
 
@@ -294,9 +300,50 @@ same RLS-enforced pattern as every other table, and `app/routers_scheduling.py`
   (rejecting with 409 if it's no longer open) and returns a ready-to-use
   `.ics` invite generated inline via `build_ics()`
 
-**Not yet done**: the `.ics` file is only returned in the API response — no
-email is actually sent. The "SMTP reminders" part of this milestone's scope
-(per `docs/PLAN.md`'s own milestone description) has not been built yet.
+**Update (ADR-031)**: `POST /slots/{id}/book` now also emails the `.ics`
+invite to the candidate via `app/email.py`'s pluggable provider (log-only by
+default — see the Email delivery section below), not just returning it in
+the API response.
+
+**Update (ADR-034)**: `POST /orgs/{id}/interview-reminders/run` sends T-24h/
+T-1h reminder emails for booked slots whose reminder window has opened,
+idempotently (a `reminder_24h_sent_at`/`reminder_1h_sent_at` pair on each
+slot prevents duplicates). Same shape as the retention endpoint (ADR-029): a
+real scheduler (cron, systemd timer, Kubernetes CronJob) is meant to invoke
+it periodically — choosing and wiring that invocation is a deployment
+decision, not something this repo bundles.
+
+## Email delivery (`apps/api`) — ADR-031
+
+`app/email.py` — pluggable outbound email, same mock-now/real-later precedent
+as every other external capability here (STT/TTS/LLM backends, ADR-017):
+`LogEmailProvider` (default) writes a structured log line for every email
+that *would* be sent instead of sending it — exactly the "log-based stub,
+swappable for a real provider later" the product spec called for, not a
+silent no-op. `SmtpEmailProvider` is a real implementation (stdlib
+`smtplib`, run in a thread so it never blocks the event loop) — genuinely
+sends mail given real SMTP credentials (`AIVA_EMAIL_BACKEND=smtp` plus the
+`AIVA_EMAIL_SMTP_*` settings), not another mock.
+
+Wired into the two places the product spec named: `POST /slots/{id}/book`
+now emails the `.ics` confirmation to the candidate (previously only
+returned in the API response), and `POST /questionnaires/{id}/invites`
+emails the candidate's one-time portal link (`AIVA_CANDIDATE_PORTAL_URL` +
+`/questionnaire/{token}`) instead of the recruiter having to copy it out of
+the API response and send it manually.
+
+T-24h/T-1h interview reminder emails are delivered by `POST
+/orgs/{id}/interview-reminders/run` (ADR-034, see the Scheduling section
+above) the same way booking confirmations are. Not built: a real
+transactional-email provider integration (SES/SendGrid/etc. — SMTP covers
+self-hosted or provider-SMTP-relay delivery, which is most of them, but not
+a dedicated API-based integration).
+
+`tests/test_email.py` covers both providers directly: `LogEmailProvider` via
+structlog's capture fixture, `SmtpEmailProvider` by mocking `smtplib.SMTP`
+(asserting the real `starttls`/`login`/`send_message` call sequence and
+message content, including the `.ics` attachment — no real network
+connection or SMTP server needed to prove the code is correct).
 
 ## Interview sessions (`apps/api`, `services/ai-gateway`, `apps/web-candidate`) — Milestone 8 (core, mock-verified)
 
@@ -540,7 +587,10 @@ Like the two integration tests before it, this one is not yet wired into
 `.github/workflows/ci.yml`'s `integration` job (still only
 `test_integration_readiness.py`) — it exists and passes when run manually.
 
-No frontend consumes any of this yet.
+No frontend consumed any of this at the time this section was written; a
+recruiter-facing questionnaire builder, invite flow, and response viewer, plus
+a candidate-facing fill-out page, now do — see "Recruiter console: requisitions,
+job descriptions, resume upload, questionnaires, scheduling" below.
 
 ## Recruiter console — Milestone 5
 
@@ -576,16 +626,117 @@ Milestone 1 design-system demo:
   what the frontend expects; this endpoint did not exist when the Milestone
   4 API was first documented above.
 
-Not yet done: no requisition-browsing UI (the pipeline page requires a
-requisition ID passed via URL query string today), no job-description or
-resume-upload UI (still API-only), no MFA prompt on login (noted directly in
-the login screen's own copy as "a later milestone"), and `apps/web-candidate`
-has not been touched — only the recruiter console has started consuming the
-real backend. Per `docs/PLAN.md`, also deliberately deferred within this
-milestone: Playwright end-to-end and accessibility (axe) test wiring, 60fps
-performance trace capture, Lighthouse audits, a command palette, and saved
-pipeline views — the latter two are treated as hardening-stage work for
-Milestones 11/12, not gaps in the current milestone.
+Requisition browsing, job-description, resume-upload, questionnaire, and
+scheduling UI were all built later (ADR-026, see the section below) — the gap
+noted at the time this milestone was first written no longer applies. The MFA
+login gap noted here too has since been closed (ADR-032): the login screen
+now prompts for a 6-digit code when the backend's `/auth/login` response
+indicates one is required, and a new `/security` page drives the
+enroll-then-activate flow, both consuming MFA endpoints that had existed on
+the backend since Milestone 2 with no frontend ever built for them. Per
+`docs/PLAN.md`, still deliberately deferred within this milestone: Playwright
+end-to-end and accessibility (axe) test wiring, 60fps performance trace
+capture, Lighthouse audits, a command palette, and saved pipeline views — the
+latter two are treated as hardening-stage work for Milestones 11/12, not gaps
+in the current milestone.
+
+## Recruiter console: requisitions, job descriptions, resume upload, questionnaires, scheduling (ADR-026)
+
+Closes the biggest remaining gap in the recruiter console: every domain
+capability below had working, tested backend logic with zero UI to reach it
+— a recruiter could not create a job description, upload a resume, build a
+questionnaire, or generate interview slots without calling the API directly.
+
+Two backend endpoints were added because no way existed to list existing
+records at all (only get-by-id): `GET /orgs/{id}/departments` and
+`GET /orgs/{id}/requisitions` (`app/routers_org.py`), plus
+`GET /requisitions/{id}/job-description` (latest version, `app/routers_resume.py`)
+and `GET /requisitions/{id}/questionnaires` (`app/routers_questionnaire.py`).
+`GET /requisitions/{id}/questionnaire-responses` was also extended to include
+`candidate_email` and `answers`, both previously omitted from the list
+response with no way to see who a response belonged to without a raw DB
+query.
+
+`apps/web-recruiter` gained five new pages: `Requisitions.tsx` (the new
+default landing route — lists departments/requisitions, creates both),
+`RequisitionDetail.tsx` (a requisition's hub: view/create the job
+description, navigate to every other page for that requisition),
+`ResumeUpload.tsx` (drag-and-drop multi-file upload against a requisition,
+then a "Score uploaded resumes" action that creates a default weight profile
+— technical 30 / experience 20 / domain 15 / education 10 / certifications 10
+/ soft_skills 10 / stability 5, matching `scoring.py`'s `DEFAULT_WEIGHTS` —
+and runs a scoring pass per resume), `Questionnaire.tsx` (a quick-start
+template covering notice period, salary expectations, work authorization,
+relocation, remote preference, a self-assessment rating, certifications,
+portfolio links, availability, and interview-time preference — matching the
+product spec's quick-start list — plus invite generation and a response
+list), and `Scheduling.tsx` (generate availability slots, list them, book one
+for a candidate, view the resulting `.ics` invite inline). `packages/ui`
+gained a `Select` component (native select, styled to match `Input`/`Textarea`)
+since none of the existing primitives covered a dropdown.
+
+`apps/web-candidate` gained a public, token-gated questionnaire page
+(`/questionnaire/:token`) — the only candidate-facing surface for
+questionnaires ADR yet had zero UI for. Renders each of the six question
+types (button groups for `yes_no`/`rating`/`multiple_choice`, text inputs for
+`short_text`/`long_text`), autosaves on a debounce, and surfaces the exact
+missing-required-question list the API returns on a rejected submit.
+
+Verified against a live stack, not just read: brought up the full compose
+stack fresh (`docker compose up --build`, migrations 0001→0013 applied),
+then exercised the entire new surface directly over HTTP with `curl` —
+register → login → create department → create requisition → list both →
+create job description → fetch it back → create questionnaire → invite →
+public fetch → public submit → staff response list (with the new
+`candidate_email` field populated correctly) → generate scheduling slots →
+list them → upload a resume → create a weight profile → run a scoring pass
+(round-tripping through the AES-256-GCM-encrypted `full_text`/extracted-field
+columns from ADR-025 transparently) → pipeline view showing the score. Every
+step returned the expected shape. The existing domain-lifecycle integration
+test suite was also re-run against the same live stack after these changes:
+24/26 pass (the 2 failures are the pre-existing sandbox-runner/Docker
+Desktop anomaly noted elsewhere in this document, unrelated to this work).
+
+**Update — now verified**: the live TypeScript compile/build this section
+originally flagged as unverified (blocked by Windows-host/WSL2-filesystem
+tooling friction: UNC-path-unaware `cmd.exe` subprocesses, a drive-letter
+workaround that hit a stale pnpm store signature, a resolved `vite` binary
+Windows refused to execute) was unblocked by installing a user-local Node.js
+binary directly inside the WSL2 distro (no `sudo`, no system package
+manager — a tarball extracted to `~/.local/node`) and running `pnpm` fully
+natively there instead of bridging Windows and WSL2 filesystems. That single
+change — do the whole toolchain on one side of the filesystem boundary —
+is what the earlier attempts were missing.
+
+With a real compiler available, `tsc --noEmit` on `apps/web-recruiter`
+surfaced 8 genuine type errors from this repo's `noUncheckedIndexedAccess`
+strict-mode flag (`packages/ui`'s `tsconfig.json`, predating this session):
+array-index access like `rows[index]` types as possibly-`undefined`, not the
+element type. All were in `ResumeUpload.tsx`'s upload/scoring loops — fixed
+by iterating `rows.entries()` instead of indexing, which gives a properly
+narrowed element with no assertion needed. `eslint` then caught a second,
+independent issue: six uses of `requisitionId!` (in `Questionnaire.tsx` and
+`Scheduling.tsx`) violated this repo's `@typescript-eslint/no-non-null-assertion`
+rule — non-null assertions compile fine but are banned here since they can
+silently hide a real `undefined` at runtime. Fixed by rebinding the
+`useParams()` value to a fresh `const` after the component's own
+`if (!id) return null` guard, which both the compiler and linter accept
+as genuinely narrowed (the hand-reviewed original code had relied on
+narrowing propagating into nested closures, which — confirmed here against a
+real compiler, not assumed — it does not for this pattern). Every one of
+these was a real bug, not a style nit: an unguarded `undefined` reaching
+`fetch()` would throw at runtime exactly when a recruiter clicked the
+affected button.
+
+`apps/web-recruiter` and `apps/web-candidate` both now pass `tsc --noEmit`,
+`vite build` (production bundle, fonts and all), and `eslint` with zero
+errors. Both production builds were also served locally (`vite preview`)
+and confirmed to return real HTML with the correct page titles — not just
+"the bundler didn't crash." The two bugs caught by hand-review before any of
+this (the candidate-questionnaire response-parsing bug and the unnecessary
+`eslint-disable`) were real too — compiler + linter verification and careful
+hand-review caught different, non-overlapping classes of bug here, which is
+itself worth noting rather than assuming either alone would have been enough.
 
 ## Design system (`packages/ui`) — Milestone 1
 
@@ -745,13 +896,12 @@ rather than silently returning garbage.
 complete, working API, testable directly, but not yet reachable through
 either web app's UI.
 
-## AI gateway (`services/ai-gateway`) — Milestone 3
+## AI gateway (`services/ai-gateway`) — Milestone 3 (real backend: Anthropic API, ADR-024)
 
 A standalone FastAPI service (own `pyproject.toml`, same quality tooling as
 `apps/api`: ruff, black, mypy strict, bandit, pytest), configured via
 `AIVA_GATEWAY_*` env vars (`llm_backend`, defaulting to `mock`;
-`vllm_base_url`; `vllm_model`, defaulting to `Qwen2.5-14B-Instruct-AWQ`, the
-model recorded in `docs/MODEL_CARD.md`).
+`anthropic_api_key`; `anthropic_model`, defaulting to `claude-sonnet-5`).
 
 - `app/contracts.py` — the gateway's stable response contract. `JudgementBase`
   requires `rationale`, `confidence` (0–1), and `cited_span_ids` (at least
@@ -783,15 +933,18 @@ model recorded in `docs/MODEL_CARD.md`).
   output more realistic for testing.
 - `app/backends.py` — a pluggable `Backend` interface with two
   implementations: `MockBackend` (deterministic, hash-seeded fake data that
-  still validates against the real response schema — lets the rest of the
-  system be built and tested before real models/hardware exist) and
-  `VllmBackend` (calls a real vLLM OpenAI-compatible endpoint using
-  **guided/constrained decoding** — passing the Pydantic JSON schema as
-  `guided_json` — with `temperature=0` and a deterministic seed for
-  reproducibility; validates the model's response against the same schema and
-  raises a clear error if the model breaks contract). `GenerationResult`
-  records the `prompt_version`, `backend`, and `model_id` alongside every
-  generated result, giving full provenance for any AI output.
+  still validates against the real response schema — used by CI and by
+  `docker compose up` with zero setup) and `AnthropicBackend` (calls the real
+  Anthropic API with a **forced tool_use call** whose `input_schema` is the
+  exact Pydantic response-model schema, so the model's only possible reply is
+  schema-shaped — the same "impossible to return invalid output" property
+  `VllmBackend`'s `guided_json` gave the earlier self-hosted-model plan, now
+  without operating any GPU inference; see ADR-024 for why that plan was
+  dropped. `temperature=0` for closest-to-reproducible output, though unlike
+  `MockBackend` this is not a byte-identical guarantee — documented, not
+  glossed over. `GenerationResult` records the `prompt_version`, `backend`,
+  and `model_id` alongside every generated result, giving full provenance for
+  any AI output.
 
 `app/main.py` assembles a real, running FastAPI app (`create_app()`, same
 `docs_url=None`/`openapi_url="/openapi.json"` pattern as `apps/api`) exposing:
@@ -800,7 +953,7 @@ model recorded in `docs/MODEL_CARD.md`).
 - `GET /prompts` — lists every loaded prompt with its content-hash version
 - `POST /v1/generate` — the core endpoint: given a `prompt_id`, a
   `response_model` name, template `inputs`, and a `seed_key`, it renders the
-  prompt, runs it through the configured backend (mock or vLLM), validates
+  prompt, runs it through the configured backend (mock or anthropic), validates
   the result against the response contract, and returns the data plus its
   `prompt_version`/`backend`/`model_id` provenance. Missing template inputs,
   an unknown prompt, or an unknown response model all return clear 400/404
@@ -815,19 +968,25 @@ accordingly.
 The gateway now has a `Dockerfile` (same multi-stage, non-root pattern as
 `apps/api`) and is wired into `compose.yaml` as the `ai-gateway` service, port
 19100 (host) / 9100 (container), running in `mock` backend mode by default
-with its own healthcheck. It is now called by the main API's scoring-run
-endpoint (see the Resume ingest and matching section above) — the two
-services are genuinely connected, not just running side by side.
+with its own healthcheck; set `ANTHROPIC_API_KEY` and
+`AIVA_GATEWAY_LLM_BACKEND=anthropic` in a local `.env` to switch it to real
+inference with zero code changes. It is now called by the main API's
+scoring-run endpoint (see the Resume ingest and matching section above) — the
+two services are genuinely connected, not just running side by side.
 
 Per `docs/PLAN.md`, Milestone 3 is now marked delivered — labeled
-"mock-verified; GPU inference deferred to deployment" — with all 7 CI jobs
-green (including the previously-failing golden-set-against-live-container
-step, after the prompts-directory fix above). Explicitly deferred to actual
-GPU deployment, not part of this milestone: pulling the real
-Qwen2.5-14B-AWQ model weights into the runtime image, the full air-gapped
-(`--network none`) end-to-end interview proof, and evaluation thresholds
-measured against the real model rather than the mock backend. The backend
-interface is designed not to change when that lands.
+"mock-verified for CI/tests; real inference via the Anthropic API when
+configured (ADR-024)" — with all 7 CI jobs green (including the previously-
+failing golden-set-against-live-container step, after the prompts-directory
+fix above; CI itself always runs on `mock`, so it needs no API key or secret).
+`services/ai-gateway/tests/test_anthropic_backend.py` proves the real-backend
+request/response contract directly (forced tool_choice, schema validation,
+schema-invalid-output rejection, missing-tool_use rejection) by mocking the
+Anthropic SDK client — no network calls, no key needed to run that suite.
+Not part of this milestone: pulling real embedding/STT/TTS model weights
+(Anthropic has no API for those — see the Embeddings and Interview sessions
+sections below), and evaluation thresholds tuned against real model output
+rather than the mock backend's synthetic fill.
 
 ## Golden-set evaluation harness (`packages/eval`)
 
@@ -891,11 +1050,18 @@ Full rationale in `docs/DECISIONS.md` (12 ADRs as of this update). Notable ones:
   `scripts/wait_ready.sh` (which polls `/readyz`) is used both locally and in
   CI, so readiness truth comes from the API rather than a container heuristic
   (ADR-013)
-- The design system's brand color (`--signal`) is not arbitrary: it was
-  sampled directly from a reference site's live CSS (primary blue `#1863DC`,
-  darker variant `#046BB3`) per a project style requirement, with a separate,
-  brighter derived color (`--signal-text`) added specifically so small
-  colored text still meets accessibility contrast guidelines (ADR-014)
+- The design system's brand color (`--signal`) is an original palette
+  (indigo-violet `#6C5CE7` dark theme / `#4B3ED1` light theme), with a
+  separate, higher-contrast derived color (`--signal-text`) so small colored
+  text still meets accessibility contrast guidelines — both re-verified
+  ≥4:1 (large UI) and ≥9:1 (`--signal-text`, small text) (ADR-014, values
+  superseded by ADR-024 when the palette was rebranded away from an earlier
+  reference site)
+- All AI reasoning (resume scoring, questionnaire evaluation, interview
+  question generation, evaluation reports) runs on the real Anthropic API
+  through `services/ai-gateway`, replacing an earlier plan to self-host an
+  open-weight model; the gateway's deterministic mock backend remains the
+  default for CI/local runs with no API key (ADR-024)
 - `exactOptionalPropertyTypes` was deliberately dropped from all frontend
   TypeScript configs after the `motion` animation library's types proved
   incompatible with it; every other strict-mode flag remains (ADR-015)
@@ -914,18 +1080,17 @@ backup/restore, incident response — all pending Milestone 12).
 
 ## Planned AI capabilities
 
-All model inference routes through the local ai-gateway; deterministic mock
-backends stand in for weights that land at GPU deployment. `docs/MODEL_CARD.md`
-records the candidate model for each capability and its current status:
+All model inference routes through the single `ai-gateway` service. `docs/MODEL_CARD.md`
+records the candidate model/provider for each capability and its current status:
 
-| Capability | Candidate model | Milestone |
+| Capability | Provider/model | Milestone |
 |---|---|---|
-| LLM reasoning/scoring | Qwen2.5-14B-Instruct AWQ (fallback Llama-3.1-8B-Instruct) | M3 (mock-verified; weights at GPU deployment) |
-| Embeddings | bge-m3 (1024-dim) | M3 |
+| LLM reasoning/scoring | Anthropic API, `claude-sonnet-5` (mock backend for CI/zero-setup) | M3; real backend since ADR-024 |
+| Embeddings | all-MiniLM-L6-v2 (384-dim, local) — no embedding API exists to call instead | M3/M10 (mock-verified; weights pending local deployment) |
 | Resume parsing (NER) | spaCy pipeline | M4 |
 | OCR fallback | PaddleOCR / Tesseract | M4 |
-| Speech-to-text | faster-whisper large-v3 / distil-large-v3 | M8 interface shipped, mock-verified; weights pending deployment |
-| Text-to-speech | Piper (ONNX voices) | M8 interface shipped, mock-verified; voices pending deployment |
+| Speech-to-text | faster-whisper large-v3 / distil-large-v3 — no speech API exists to call instead | M8 interface shipped, mock-verified; weights pending deployment |
+| Text-to-speech | Piper (ONNX voices) — no speech API exists to call instead | M8 interface shipped, mock-verified; voices pending deployment |
 | Identity verification | InsightFace ArcFace (with consent gate) | deferred to M11 integrity work |
 | Proctoring signals | MediaPipe Face Mesh | deferred to M11 integrity work |
 | Reranker | bge-reranker-v2-m3 | M10 |
@@ -975,16 +1140,25 @@ automatically on every change" as two separate claims going forward, even
 now that the gap above is closed.
 
 **Milestones 6 and 7 are marked "(core)"** — PLAN.md explicitly scopes out,
-as deliberately deferred rather than forgotten: for Milestone 6, AI-based
-evaluation of candidate answers and resume-inconsistency flagging (blocked
-on a real AI model being deployed at Milestone 3, though the gateway
-contract to support it already exists), the candidate-facing portal
-screens, and persistent storage for file-upload-type question answers; for
-Milestone 7, actually sending the `.ics` invite and reminder emails
-(deferred to Milestone 12, which is where a self-hosted mail server gets
-wired into the compose stack), the candidate-facing self-scheduling UI
-(arrives with the Milestone 6 portal), and a cap on how many interviews one
+as deliberately deferred rather than forgotten: for Milestone 6, the
+candidate-facing portal screens and persistent storage for file-upload-type
+question answers; for Milestone 7, the candidate-facing self-scheduling UI
+(arrives with the Milestone 6 portal) and a cap on how many interviews one
 interviewer can be booked into per slot.
+
+Two items originally deferred here have since been delivered. AI-based
+evaluation of candidate questionnaire answers and resume-inconsistency
+flagging was blocked on a real AI model being deployed at Milestone 3 (the
+gateway contract to support it already existed) — ADR-024's switch to the
+real Anthropic API unblocked it, and ADR-033 delivered it:
+`POST /questionnaire-responses/{id}/evaluate`. Actually sending the `.ics`
+invite and questionnaire-portal emails was deferred to Milestone 12's
+self-hosted mail server — ADR-031 delivered it earlier, via a pluggable
+`EmailProvider` (log stub by default, real SMTP via stdlib `smtplib`) rather
+than requiring a bundled mail server; T-24h/T-1h reminder emails were
+delivered afterward (ADR-034), via the same "expose an idempotent endpoint,
+let the deployer wire the schedule" shape as retention (ADR-029) rather than
+adding an in-process scheduler this codebase has no other precedent for.
 
 Milestone 8 (consent, device pre-check, adaptive STT/TTS interview loop,
 and the live candidate HUD), Milestone 9 (sandboxed live-coding workspace:

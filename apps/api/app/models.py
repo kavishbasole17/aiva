@@ -7,6 +7,8 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, String,
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.crypto import EncryptedText
+
 FAQ_EMBEDDING_DIM = 384
 
 
@@ -140,7 +142,7 @@ class ResumeDocument(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     mime_type: Mapped[str] = mapped_column(String(64))
     page_count: Mapped[int] = mapped_column(BigInteger, default=1)
-    full_text: Mapped[str] = mapped_column(Text)
+    full_text: Mapped[str] = mapped_column(EncryptedText)  # AES-256-GCM at rest, see crypto.py
     candidate_email: Mapped[str | None] = mapped_column(String(320))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -153,12 +155,12 @@ class ExtractedFieldRow(Base):
         UUID(as_uuid=True), ForeignKey("resume_documents.id"), index=True
     )
     field_name: Mapped[str] = mapped_column(String(64))
-    value: Mapped[str] = mapped_column(Text)
+    value: Mapped[str] = mapped_column(EncryptedText)  # AES-256-GCM at rest, see crypto.py
     confidence: Mapped[float] = mapped_column(Float)
     page_number: Mapped[int] = mapped_column(BigInteger)
     start_offset: Mapped[int] = mapped_column(BigInteger)
     end_offset: Mapped[int] = mapped_column(BigInteger)
-    source_quote: Mapped[str] = mapped_column(Text)
+    source_quote: Mapped[str] = mapped_column(EncryptedText)  # AES-256-GCM at rest
     extractor: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -252,6 +254,7 @@ class QuestionnaireResponse(Base):
     missing_required: Mapped[list[str]] = mapped_column(JSONB, default=list)
     submitted: Mapped[bool] = mapped_column(Boolean, default=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_evaluation: Mapped[dict[str, object] | None] = mapped_column(JSONB, default=None)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=utcnow
     )
@@ -271,6 +274,8 @@ class InterviewSlot(Base):
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), default="open")
     booked_for_email: Mapped[str | None] = mapped_column(String(320))
+    reminder_24h_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_1h_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -330,7 +335,7 @@ class InterviewTurn(Base):
     kind: Mapped[str] = mapped_column(String(16))
     topic_id: Mapped[str | None] = mapped_column(String(64))
     question_text: Mapped[str] = mapped_column(Text)
-    answer_text: Mapped[str | None] = mapped_column(Text)
+    answer_text: Mapped[str | None] = mapped_column(EncryptedText)  # AES-256-GCM at rest
     stt_confidence: Mapped[float | None] = mapped_column(Float)
     stt_model_id: Mapped[str | None] = mapped_column(String(128))
     tts_model_id: Mapped[str | None] = mapped_column(String(128))

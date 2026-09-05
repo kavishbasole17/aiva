@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiva.fullname" . }}-ai-gateway
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "ai-gateway" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.aiGateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ai-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiva.componentLabels" (dict "component" "ai-gateway" "Release" .Release) | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: ai-gateway
+          image: {{ include "aiva.image" (dict "name" "ai-gateway" "root" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.aiGateway.port }}
+          envFrom:
+            - secretRef:
+                name: {{ include "aiva.fullname" . }}-secrets
+          env:
+            - name: AIVA_GATEWAY_LLM_BACKEND
+              value: {{ .Values.aiGateway.llmBackend | quote }}
+            - name: AIVA_GATEWAY_ANTHROPIC_MODEL
+              value: "claude-sonnet-5"
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.aiGateway.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.aiGateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiva.fullname" . }}-ai-gateway
+  labels:
+    {{- include "aiva.componentLabels" (dict "component" "ai-gateway" "Release" .Release) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: ai-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.aiGateway.port }}
+      targetPort: {{ .Values.aiGateway.port }}

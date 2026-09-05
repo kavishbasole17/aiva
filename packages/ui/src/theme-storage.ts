@@ -1,8 +1,8 @@
 export type ThemeName = "dark" | "light";
 
-// v2: bumped when the default theme changed from dark to light (Atigro
-// redesign) so browsers with a pre-redesign cached "dark" value under the
-// old key don't silently override the new default forever.
+// v2: bumped when the default theme changed from dark to light so browsers
+// with a pre-redesign cached "dark" value under the old key don't silently
+// override the new default forever.
 const STORAGE_KEY = "aiva.theme.v2";
 
 const DEFAULT_THEME: ThemeName = "light";

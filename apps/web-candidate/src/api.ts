@@ -254,6 +254,51 @@ export function reportIntegritySignal(
   });
 }
 
+export interface QuestionnaireQuestion {
+  id: string;
+  prompt: string;
+  type: "multiple_choice" | "yes_no" | "rating" | "long_text" | "short_text" | "file_upload";
+  required?: boolean;
+  options?: string[];
+}
+
+export interface QuestionnaireState {
+  title: string;
+  questions: QuestionnaireQuestion[];
+  answers: Record<string, string>;
+  candidate_email: string;
+}
+
+export interface QuestionnaireSaveResult {
+  saved: boolean;
+  submitted: boolean;
+  missing_required: string[];
+  history_entries: number;
+}
+
+function putJson<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function getQuestionnaire(token: string): Promise<QuestionnaireState> {
+  return request(`/public/questionnaires/${encodeURIComponent(token)}`);
+}
+
+export function saveQuestionnaireResponse(
+  token: string,
+  answers: Record<string, string>,
+  submit: boolean,
+): Promise<QuestionnaireSaveResult> {
+  return putJson(`/public/questionnaires/${encodeURIComponent(token)}/responses`, {
+    answers,
+    submit,
+  });
+}
+
 export async function healthLatencyMs(): Promise<number> {
   const started = performance.now();
   await fetch(`${API_BASE}/healthz`, { cache: "no-store" });
