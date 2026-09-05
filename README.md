@@ -1116,16 +1116,15 @@ alongside the original `test_integration_readiness.py` in an earlier job.
 So Milestones 2, 4, 6, and 8's core claims of being proven against a live
 stack in CI are now accurate as written, not just as intended.
 
-Two narrower gaps flagged earlier remain open and PLAN.md does not claim
-otherwise: the `GET /requisitions/{id}/candidates` endpoint added for
-Milestone 5 still has no automated test coverage at all (not merely
-unwired from CI — no test exists for it in the codebase); and Milestone 7
-(scheduling) still has no dedicated integration test — only unit tests
-(`test_scheduling.py`, `test_ics.py`) plus the generic readiness check,
-not an end-to-end proof against a live stack. Neither of these indicates
-missing feature work — both areas are built and function correctly when
-exercised manually or via unit test — only that their automated safety
-net is narrower than the rest of the platform's.
+**Update**: the two narrower gaps this document tracked here are now both
+closed. The `GET /requisitions/{id}/candidates` endpoint added for
+Milestone 5 is now exercised by `test_integration_m11.py` (blind-screening
+mode) and `test_integration_retention.py` (plain mode, verifying erasure);
+and Milestone 7 (scheduling) now has a dedicated live-stack integration test,
+`test_integration_scheduling.py`, wired into `ci.yml`'s `integration` job
+alongside the others — not just the unit tests (`test_scheduling.py`,
+`test_ics.py`) and generic readiness check that used to be its only
+automated coverage.
 
 **This tracking was not academic**: while building Milestone 8's
 integration flow, the team discovered that migrations `0004` (questionnaires)
