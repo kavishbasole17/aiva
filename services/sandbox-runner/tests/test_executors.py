@@ -89,6 +89,22 @@ async def test_output_is_truncated_past_cap() -> None:
     assert len(result.stdout) <= 65_536
 
 
+async def test_unbounded_output_is_capped_while_draining_not_after() -> None:
+    """A genuinely infinite print loop must not be buffered wholesale before
+    truncation (that's exactly the memory-exhaustion DoS this executor is
+    supposed to prevent) -- it must be capped incrementally while still
+    being read to EOF, so the child is never blocked writing to a full pipe
+    and instead runs to its own wall-clock timeout as normal."""
+    result = await _run(
+        build_executor("python"),
+        "while True:\n    print('x' * 8192)\n",
+        timeout_seconds=2,
+    )
+    assert result.timed_out is True
+    assert result.truncated is True
+    assert len(result.stdout) <= 65_536
+
+
 async def test_pid_namespace_hides_other_processes() -> None:
     """A run in its own PID namespace should see itself as pid 1, with no
     sibling processes visible — confirms --pid --fork is actually landing,

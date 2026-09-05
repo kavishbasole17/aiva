@@ -28,11 +28,13 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
+from typing import IO
 
 from pydantic import BaseModel, Field
 
@@ -88,11 +90,52 @@ class ExecutionResult(BaseModel):
     language: str
 
 
-def _truncate(data: bytes, limit: int) -> tuple[str, bool]:
-    text = data.decode("utf-8", errors="replace")
-    if len(text) <= limit:
-        return text, False
-    return text[:limit], True
+def _decode(data: bytes) -> str:
+    return data.decode("utf-8", errors="replace")
+
+
+class _CappedBuffer:
+    """Accumulates up to `limit` bytes and remembers whether more arrived.
+
+    Bounding accumulation *while still draining the pipe to EOF* is the
+    point: an unread pipe fills its kernel buffer and blocks the writing
+    child indefinitely, so discarding past the cap (rather than stopping the
+    read loop) is what lets unbounded candidate output -- a bare
+    `while True: print(...)` loop -- run to its own CPU/wall-clock limit
+    instead of being buffered wholesale into this service's own memory, the
+    way `Popen.communicate()` would.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._buf = bytearray()
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    def add(self, chunk: bytes) -> None:
+        with self._lock:
+            remaining = self._limit - len(self._buf)
+            if remaining <= 0:
+                self._truncated = True
+                return
+            if len(chunk) > remaining:
+                self._truncated = True
+            self._buf.extend(chunk[:remaining])
+
+    def result(self) -> tuple[str, bool]:
+        with self._lock:
+            return _decode(bytes(self._buf)), self._truncated
+
+
+def _pump(pipe: IO[bytes], sink: _CappedBuffer) -> None:
+    try:
+        while True:
+            chunk = pipe.read(65536)
+            if not chunk:
+                return
+            sink.add(chunk)
+    finally:
+        pipe.close()
 
 
 def _drop_privileges(uid: int, gid: int) -> None:
@@ -313,22 +356,41 @@ class _SubprocessExecutor(Executor):
                 preexec_fn=preexec,
                 start_new_session=True,
             )
+            stdout_sink = _CappedBuffer(max_output_bytes)
+            stderr_sink = _CappedBuffer(max_output_bytes)
+            stdout_thread = threading.Thread(
+                target=_pump, args=(process.stdout, stdout_sink), daemon=True
+            )
+            stderr_thread = threading.Thread(
+                target=_pump, args=(process.stderr, stderr_sink), daemon=True
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+            try:
+                process.stdin.write(stdin.encode("utf-8"))
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                process.stdin.close()
+
             timed_out = False
             try:
-                stdout_bytes, stderr_bytes = process.communicate(
-                    input=stdin.encode("utf-8"), timeout=timeout_seconds
-                )
+                process.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
-                stdout_bytes, stderr_bytes = process.communicate()
+                process.wait()
+            # The reader threads see EOF (and return) once the killed
+            # process's pipes close, so a bounded join here is just a safety
+            # net, not the thing actually stopping them.
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
             duration_ms = int((time.monotonic() - started) * 1000)
-
-            stdout, out_truncated = _truncate(stdout_bytes, max_output_bytes)
-            stderr, err_truncated = _truncate(stderr_bytes, max_output_bytes)
+            stdout, out_truncated = stdout_sink.result()
+            stderr, err_truncated = stderr_sink.result()
             return ExecutionResult(
                 stdout=stdout,
                 stderr=stderr,
