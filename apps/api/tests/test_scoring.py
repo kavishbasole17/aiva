@@ -47,6 +47,8 @@ def test_validate_profile_rejects_unknown_and_missing() -> None:
         validate_profile(incomplete)
     with pytest.raises(ValueError, match="non-negative"):
         validate_profile(dict(DEFAULT_WEIGHTS_SAFE, technical=-1))
+    with pytest.raises(ValueError, match="one weight must be positive"):
+        validate_profile({name: 0 for name in DEFAULT_WEIGHTS_SAFE})
     validate_profile(DEFAULT_WEIGHTS_SAFE)
 
 

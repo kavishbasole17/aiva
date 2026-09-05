@@ -82,6 +82,13 @@ def validate_profile(weights: dict[str, int]) -> None:
     for name, weight in weights.items():
         if not isinstance(weight, int) or weight < 0:
             raise ValueError(f"Weight for {name} must be a non-negative integer")
+    # Every weight individually non-negative still allows all-zero, which
+    # WeightProfile.normalized() rejects (division by zero) -- catching it
+    # here, at profile creation, means a bad profile fails once with a clear
+    # 400 instead of every later scoring run failing with an unhandled 500
+    # after already having paid for the gateway calls.
+    if sum(weights.values()) <= 0:
+        raise ValueError("At least one weight must be positive")
 
 
 def compute_total_score(dimensions: list[DimensionInput], profile: WeightProfile) -> int:
